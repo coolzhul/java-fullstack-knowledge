@@ -2,8 +2,10 @@ import { defineUserConfig } from "vuepress";
 
 import theme from "./theme.js";
 
+const base: "/" | `/${string}/` = (process.env.BASE_URL as "/" | `/${string}/`) || "/";
+
 export default defineUserConfig({
-  base: "/java-fullstack-knowledge/",
+  base,
 
   lang: "zh-CN",
   title: "Java全栈知识库",
