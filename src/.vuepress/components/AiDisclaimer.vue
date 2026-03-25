@@ -1,17 +1,19 @@
 <template>
-  <div
-    class="ai-disclaimer"
-    :style="{ left: position.x + 'px', top: position.y + 'px' }"
-    @mousedown="startDrag"
-  >
-    ⚠️ 内容由AI创作，请谨慎甄别
-  </div>
+  <ClientOnly>
+    <div
+      class="ai-disclaimer"
+      :style="{ left: position.x + 'px', top: position.y + 'px' }"
+      @mousedown="startDrag"
+    >
+      ⚠️ 内容由AI创作，请谨慎甄别
+    </div>
+  </ClientOnly>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from "vue";
 
-const position = ref({ x: window.innerWidth - 250, y: window.innerHeight - 60 });
+const position = ref({ x: 0, y: 0 });
 const isDragging = ref(false);
 const offset = ref({ x: 0, y: 0 });
 
@@ -45,6 +47,12 @@ const stopDrag = () => {
 };
 
 onMounted(() => {
+  // 初始化位置
+  position.value = {
+    x: window.innerWidth - 250,
+    y: window.innerHeight - 60,
+  };
+
   document.addEventListener("mousemove", onDrag);
   document.addEventListener("mouseup", stopDrag);
 });
