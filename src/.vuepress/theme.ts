@@ -25,7 +25,7 @@ export default hopeTheme({
   sidebar,
 
   // 页脚
-  footer: "MIT 协议 | 版权所有 © 2024-present coolzhul",
+  footer: "MIT 协议 | 版权所有 © 2024-present coolzhul | ⚠️ 内容由AI创作，请谨慎甄别",
   displayFooter: true,
 
   // 多语言配置
