@@ -37,7 +37,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      - name: Build VuePress site
+      # 为 GitHub Pages 构建
+      - name: Build for GitHub Pages
         run: pnpm docs:build
         env:
           BASE_URL: /java-fullstack-knowledge/
@@ -51,6 +52,15 @@ jobs:
         uses: actions/upload-pages-artifact@v3
         with:
           path: src/.vuepress/dist
+
+      # 为腾讯云构建
+      - name: Clean dist
+        run: rm -rf src/.vuepress/dist
+
+      - name: Build for Tencent Cloud
+        run: pnpm docs:build
+        env:
+          BASE_URL: /
 
       - name: Upload artifact for Tencent Cloud
         uses: actions/upload-artifact@v4
