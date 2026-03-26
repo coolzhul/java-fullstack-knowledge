@@ -52,7 +52,8 @@ jobs:
         with:
           path: src/.vuepress/dist
 
-  deploy:
+  # 部署到 GitHub Pages
+  deploy-github:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -62,3 +63,26 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+  # 部署到腾讯云服务器
+  deploy-tencent:
+    needs: build
+    runs-on: ubuntu-latest
+    # 配置好 Secrets 后删除下面这行
+    if: ${{ secrets.TENCENT_HOST != '' }}
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: github-pages
+          path: dist
+
+      - name: Deploy to Tencent Cloud
+        uses: easingthemes/ssh-deploy@main
+        with:
+          SSH_PRIVATE_KEY: ${{ secrets.TENCENT_SSH_KEY }}
+          REMOTE_HOST: ${{ secrets.TENCENT_HOST }}
+          REMOTE_USER: ${{ secrets.TENCENT_USER }}
+          SOURCE: dist/
+          TARGET: ${{ secrets.TENCENT_TARGET }}
+          ARGS: -avz --delete
