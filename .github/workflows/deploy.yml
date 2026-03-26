@@ -68,8 +68,6 @@ jobs:
   deploy-tencent:
     needs: build
     runs-on: ubuntu-latest
-    # 配置好 Secrets 后删除下面这行
-    if: ${{ secrets.TENCENT_HOST != '' }}
     steps:
       - name: Download artifact
         uses: actions/download-artifact@v4
