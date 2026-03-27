@@ -1,286 +1,131 @@
 ---
 title: Docker
 icon: docker
-order: 3
+order: 1
 category:
-  - 工具
+  - 开发工具
 tag:
   - Docker
   - 容器
+  - 容器化
 ---
 
 # Docker
 
-Docker是容器化平台，简化应用的部署和运行。
+> Docker 解决的是"在我的机器上能跑"的问题。开发环境、测试环境、生产环境不一致，部署依赖冲突，版本升级困难——Docker 通过容器化让这一切标准化。这篇文章聚焦 Java 后端开发中最常用的 Docker 知识。
+
+## 基础入门：Docker 是什么？
+
+### 为什么需要 Docker？
+
+```
+"在我的机器上能跑啊！"
+→ 环境不一致导致的问题：Java 版本、系统库、配置文件...
+
+Docker 的解决方案：
+把应用 + 运行环境打包成一个"容器"
+→ 在任何机器上运行都一样
+```
+
+### 常用命令
+
+```bash
+# 镜像操作
+docker pull mysql:8.0          # 拉取镜像
+docker images                   # 查看本地镜像
+docker build -t myapp .         # 构建镜像
+
+# 容器操作
+docker run -d -p 8080:8080 myapp   # 后台运行，端口映射
+docker ps                            # 查看运行中的容器
+docker logs <container-id>            # 查看日志
+docker exec -it <container-id> bash  # 进入容器
+docker stop <container-id>            # 停止容器
+
+# 清理
+docker system prune              # 清理无用镜像和容器
+```
+
+---
+
 
 ## 核心概念
 
-| 概念 | 说明 |
-|------|------|
-| Image | 镜像，只读模板 |
-| Container | 容器，镜像的运行实例 |
-| Registry | 仓库，存储镜像 |
-| Dockerfile | 构建镜像的脚本 |
+```
+镜像（Image）：只读模板，包含运行应用所需的一切（代码、运行时、库、配置）
+容器（Container）：镜像的运行实例（可以启动、停止、删除）
+仓库（Registry）：存放和分发镜像的地方（Docker Hub、私有仓库）
 
-## 常用命令
-
-### 镜像操作
-
-```bash
-# 搜索镜像
-docker search nginx
-
-# 拉取镜像
-docker pull nginx:latest
-docker pull nginx:1.24
-
-# 查看镜像
-docker images
-docker image ls
-
-# 删除镜像
-docker rmi nginx:latest
-docker image prune  # 清理无用镜像
-
-# 构建镜像
-docker build -t myapp:1.0 .
-docker build -t myapp:1.0 -f Dockerfile.prod .
-
-# 导出/导入镜像
-docker save -o myapp.tar myapp:1.0
-docker load -i myapp.tar
+类比：
+  镜像 → 类
+  容器 → 对象（类的实例）
+  仓库 → Maven Central（代码仓库）
 ```
 
-### 容器操作
-
-```bash
-# 运行容器
-docker run -d --name nginx -p 80:80 nginx:latest
-docker run -it --name ubuntu ubuntu:22.04 /bin/bash
-
-# 查看容器
-docker ps           # 运行中的容器
-docker ps -a        # 所有容器
-
-# 启动/停止/重启
-docker start nginx
-docker stop nginx
-docker restart nginx
-
-# 进入容器
-docker exec -it nginx /bin/bash
-docker attach nginx
-
-# 查看日志
-docker logs nginx
-docker logs -f --tail 100 nginx
-
-# 删除容器
-docker rm nginx
-docker rm -f nginx  # 强制删除运行中的容器
-docker container prune  # 清理所有停止的容器
-
-# 复制文件
-docker cp file.txt nginx:/tmp/
-docker cp nginx:/etc/nginx/nginx.conf ./
-```
-
-### 其他命令
-
-```bash
-# 查看资源使用
-docker stats
-
-# 查看容器详情
-docker inspect nginx
-
-# 查看端口映射
-docker port nginx
-
-# 查看进程
-docker top nginx
-```
-
-## Dockerfile
-
-### 基本结构
+## Dockerfile 最佳实践
 
 ```dockerfile
-# 基础镜像
-FROM openjdk:17-jdk-slim
-
-# 维护者
-LABEL maintainer="dev@example.com"
-
-# 设置工作目录
+# Java 应用的多阶段构建（减小镜像体积）
+FROM eclipse-temurin:21-jdk-alpine AS build
 WORKDIR /app
-
-# 复制文件
-COPY target/myapp.jar app.jar
-
-# 暴露端口
-EXPOSE 8080
-
-# 环境变量
-ENV JAVA_OPTS="-Xms256m -Xmx512m"
-
-# 启动命令
-ENTRYPOINT ["java", "-jar", "app.jar"]
-```
-
-### 多阶段构建
-
-```dockerfile
-# 构建阶段
-FROM maven:3.9-eclipse-temurin-17 AS builder
-WORKDIR /build
 COPY pom.xml .
 COPY src ./src
-RUN mvn clean package -DskipTests
+RUN ./mvnw clean package -DskipTests
 
-# 运行阶段
-FROM eclipse-temurin:17-jre-alpine
+FROM eclipse-temurin:21-jre-alpine  # 只用 JRE，不用 JDK
 WORKDIR /app
-COPY --from=builder /build/target/*.jar app.jar
+COPY --from=build /app/target/*.jar app.jar
 EXPOSE 8080
 ENTRYPOINT ["java", "-jar", "app.jar"]
 ```
 
-### 最佳实践
-
-```dockerfile
-# 1. 使用特定版本
-FROM nginx:1.24.0-alpine
-
-# 2. 合并RUN命令
-RUN apt-get update && apt-get install -y \
-    curl \
-    vim \
-    && rm -rf /var/lib/apt/lists/*
-
-# 3. 使用COPY而非ADD
-COPY config.yml /app/config/
-
-# 4. 优化层缓存
-COPY pom.xml .
-RUN mvn dependency:go-offline
-COPY src ./src
-RUN mvn package
-
-# 5. 使用非root用户
-RUN addgroup -S app && adduser -S app -G app
-USER app
-
-# 6. 健康检查
-HEALTHCHECK --interval=30s --timeout=3s \
-    CMD curl -f http://localhost:8080/actuator/health || exit 1
-```
+::: tip 镜像体积优化
+1. 多阶段构建（构建阶段用 JDK，运行阶段用 JRE）→ 镜像从 500MB 降到 100MB
+2. 使用 Alpine 基础镜像（Alpine Linux 只有 5MB）
+3. 合理利用缓存（先 COPY pom.xml，利用 Docker 缓存层）
+4. 不要在镜像中放开发工具（vim、curl 等）
+:::
 
 ## Docker Compose
 
-### 基本配置
-
 ```yaml
-# docker-compose.yml
+# docker-compose.yml（本地开发环境一键启动）
 version: '3.8'
-
 services:
   app:
     build: .
     ports:
       - "8080:8080"
     environment:
-      - SPRING_PROFILES_ACTIVE=prod
-      - DB_HOST=db
+      - SPRING_PROFILES_ACTIVE=dev
+      - SPRING_DATASOURCE_URL=jdbc:mysql://db:3306/mydb
     depends_on:
-      - db
-      - redis
-    networks:
-      - backend
+      db:
+        condition: service_healthy
 
   db:
     image: mysql:8.0
     environment:
-      - MYSQL_ROOT_PASSWORD=secret
-      - MYSQL_DATABASE=mydb
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: mydb
     volumes:
-      - db-data:/var/lib/mysql
-    networks:
-      - backend
-
-  redis:
-    image: redis:7-alpine
-    networks:
-      - backend
-
-networks:
-  backend:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      retries: 5
 
 volumes:
-  db-data:
+  mysql_data:
 ```
 
-### 常用命令
+## 面试高频题
 
-```bash
-# 启动
-docker-compose up -d
+**Q1：容器和虚拟机的区别？**
 
-# 停止
-docker-compose down
+虚拟机：硬件级虚拟化，每个 VM 有自己的操作系统内核，隔离性强但资源开销大（GB 级）。容器：操作系统级虚拟化，共享宿主机内核，隔离性较弱但资源开销小（MB 级），启动快（秒级 vs 分钟级）。
 
-# 查看状态
-docker-compose ps
+## 延伸阅读
 
-# 查看日志
-docker-compose logs -f app
-
-# 重建服务
-docker-compose up -d --build app
-
-# 执行命令
-docker-compose exec app bash
-```
-
-## Docker网络
-
-```bash
-# 创建网络
-docker network create mynet
-
-# 查看网络
-docker network ls
-
-# 连接容器到网络
-docker network connect mynet nginx
-
-# 运行时指定网络
-docker run -d --name app --network mynet myapp:1.0
-```
-
-## 数据卷
-
-```bash
-# 创建卷
-docker volume create mydata
-
-# 查看卷
-docker volume ls
-
-# 使用卷
-docker run -v mydata:/app/data myapp:1.0
-
-# 挂载主机目录
-docker run -v /host/path:/container/path myapp:1.0
-```
-
-## 小结
-
-| 概念 | 说明 |
-|------|------|
-| 镜像 | 只读模板 |
-| 容器 | 运行实例 |
-| Dockerfile | 构建脚本 |
-| Compose | 多容器编排 |
-| 网络 | 容器通信 |
-| 卷 | 数据持久化 |
+- [Git](git.md) — 版本控制、分支策略
+- [Maven](maven.md) — 依赖管理、构建生命周期

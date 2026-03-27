@@ -5,318 +5,196 @@ order: 1
 category:
   - 架构
 tag:
+  - 架构
   - 高并发
-  - 系统设计
+  - 缓存
 ---
 
 # 高并发架构
 
-高并发架构设计目标是处理大量并发请求，保证系统稳定性和响应速度。
+> 高并发不是"把服务器加到 100 台"就能解决的。10000 QPS 和 1000000 QPS 面对的挑战完全不同——数据库扛不住、缓存击穿、限流怎么做、消息堆积怎么处理。这篇文章从"请求进来"到"响应返回"，讲清楚每个环节的应对策略。
 
-## 核心指标
+## 基础入门：什么是高并发？
 
-| 指标 | 说明 | 目标 |
+### 高并发场景有多常见？
+
+```
+秒杀：10万人抢1000件商品 → 瞬时 QPS 暴增 100 倍
+微博热搜：一条热门微博 → 读多写少，QPS 数万
+直播互动：弹幕 + 礼物 → 高频写入，实时性要求高
+```
+
+### 三大核心指标
+
+| 指标 | 含义 | 目标 |
 |------|------|------|
-| QPS | 每秒请求数 | 根据业务定 |
-| RT | 响应时间 | < 200ms |
-| 并发数 | 同时处理请求数 | 根据业务定 |
-| 成功率 | 请求成功比例 | > 99.9% |
+| QPS | 每秒查询数 | 根据业务定 |
+| 响应时间 | 请求处理时间 | < 200ms |
+| 可用性 | 系统正常服务时间占比 | 99.99%（4个9） |
 
-## 架构设计
-
-### 分层架构
+### 应对思路
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      客户端层                                │
-│                   (Web/App/小程序)                          │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│                      网关层                                  │
-│           (Nginx / Kong / Spring Cloud Gateway)            │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│                      应用层                                  │
-│                   (微服务集群)                              │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│                      数据层                                  │
-│              (MySQL / Redis / Elasticsearch)               │
-└─────────────────────────────────────────────────────────────┘
+1. 缓存：读多写少 → Redis 缓存
+2. 异步：非核心操作 → MQ 异步
+3. 限流：保护后端 → Sentinel 限流
+4. 降级：兜底方案 → 返回默认数据
+5. 分库分表：数据量大 → 水平拆分
+
+---
+
+
+## 高并发三大利器
+
+```mermaid
+graph LR
+    A[客户端] --> CDN[CDN]
+    CDN --> LB[负载均衡 Nginx]
+    LB --> LIMIT[限流 Sentinel]
+    LIMIT --> CACHE[Redis 缓存]
+    CACHE --> MQ[消息队列]
+    CACHE --> DB[MySQL 读写分离]
 ```
 
-## 缓存策略
-
-### 多级缓存
-
 ```
-请求 → 本地缓存 → Redis → 数据库
-        (Caffeine)   ↓
-                  分布式缓存
+请求进来
+    │
+    ▼
+CDN / DNS（静态资源加速，减少源站压力）
+    │
+    ▼
+负载均衡（Nginx / LVS）
+    │
+    ▼
+限流（Sentinel / 令牌桶）
+    │
+    ▼
+缓存（Redis）
+    │    │
+    │    ├── 命中 → 直接返回
+    │    └── 未命中 → 穿透保护 → 查数据库 → 写缓存
+    │
+    ▼
+异步（消息队列 MQ）
+    │    │
+    │    └── 非核心操作异步化（发通知、写日志、数据分析）
+    │
+    ▼
+数据库（读写分离 + 分库分表）
 ```
 
-### 缓存模式
+## 缓存——高并发的第一道防线
+
+### 缓存的三大经典问题
 
 ```java
-// Cache-Aside（旁路缓存）
-public User getUser(Long id) {
-    // 1. 先查缓存
-    User user = redis.get("user:" + id);
-    if (user != null) {
-        return user;
-    }
+// 1. 缓存穿透：查询不存在的数据，缓存永远没有，每次都打到数据库
+// 解决：
+// - 缓存空值（设置较短的过期时间）
+// - 布隆过滤器（Bloom Filter）快速判断 key 是否可能存在
 
-    // 2. 查数据库
-    user = userDao.findById(id);
-    if (user != null) {
-        // 3. 写入缓存
-        redis.setex("user:" + id, 3600, user);
-    }
-    return user;
-}
+// 2. 缓存击穿：热点 key 过期的瞬间，大量请求同时打到数据库
+// 解决：
+// - 互斥锁（SETNX 加锁，只有一个线程能查数据库）
+// - 逻辑过期（不设物理过期，后台线程异步刷新）
+// - 永不过期 + 后台更新
 
-// Write-Through（写穿透）
-public void updateUser(User user) {
-    // 同时更新缓存和数据库
-    userDao.update(user);
-    redis.set("user:" + user.getId(), user);
-}
+// 3. 缓存雪崩：大量 key 同时过期，数据库瞬间压力暴增
+// 解决：
+// - 过期时间加随机偏移（避免同时过期）
+// - 多级缓存（本地缓存 + Redis）
+// - 熔断降级（数据库扛不住就降级）
 ```
 
-## 限流策略
-
-### 算法
+### 缓存使用最佳实践
 
 ```java
-// 1. 固定窗口
-public class FixedWindow {
-    private int count = 0;
-    private long startTime = System.currentTimeMillis();
-    private int limit = 100;
-    private long windowSize = 1000;  // 1秒
-
-    public boolean allow() {
-        long now = System.currentTimeMillis();
-        if (now - startTime > windowSize) {
-            count = 0;
-            startTime = now;
-        }
-        return ++count <= limit;
-    }
-}
-
-// 2. 滑动窗口
-public class SlidingWindow {
-    private LinkedList<Long> queue = new LinkedList<>();
-    private int limit = 100;
-    private long windowSize = 1000;
-
-    public boolean allow() {
-        long now = System.currentTimeMillis();
-        while (!queue.isEmpty() && queue.peek() < now - windowSize) {
-            queue.poll();
-        }
-        if (queue.size() < limit) {
-            queue.offer(now);
-            return true;
-        }
-        return false;
-    }
-}
-
-// 3. 令牌桶
-public class TokenBucket {
-    private long capacity = 100;
-    private long tokens = 0;
-    private long rate = 10;  // 每秒生成10个令牌
-    private long lastTime = System.currentTimeMillis();
-
-    public boolean allow() {
-        long now = System.currentTimeMillis();
-        tokens = Math.min(capacity, tokens + (now - lastTime) / 1000 * rate);
-        lastTime = now;
-        if (tokens > 0) {
-            tokens--;
-            return true;
-        }
-        return false;
-    }
-}
-
-// 4. 漏桶
-public class LeakyBucket {
-    private long capacity = 100;
-    private long water = 0;
-    private long rate = 10;  // 每秒漏出10个
-    private long lastTime = System.currentTimeMillis();
-
-    public boolean allow() {
-        long now = System.currentTimeMillis();
-        water = Math.max(0, water - (now - lastTime) / 1000 * rate);
-        lastTime = now;
-        if (water < capacity) {
-            water++;
-            return true;
-        }
-        return false;
-    }
-}
+// 1. 缓存粒度：不要缓存整个对象，缓存需要的字段
+// 2. 过期策略：热点数据短过期（5-10分钟），冷数据长过期（1小时+）
+// 3. 缓存预热：系统启动时加载热点数据
+// 4. 大 Key 拆分：单个 value 不要超过 10KB
+// 5. 热 Key 分散：同一个 key 的请求分散到多个副本
 ```
 
-### Sentinel限流
-
-```java
-// 注解方式
-@SentinelResource(value = "getUser", blockHandler = "handleBlock")
-public User getUser(Long id) {
-    return userDao.findById(id);
-}
-
-public User handleBlock(Long id, BlockException ex) {
-    return new User();  // 返回默认值
-}
-
-// 规则配置
-FlowRule rule = new FlowRule();
-rule.setResource("getUser");
-rule.setGrade(RuleConstant.FLOW_GRADE_QPS);
-rule.setCount(100);  // QPS限制为100
-FlowRuleManager.loadRules(Collections.singletonList(rule));
-```
-
-## 熔断降级
-
-### Hystrix/Sentinel/Resilience4j
-
-```java
-// Sentinel熔断
-@SentinelResource(
-    value = "getUser",
-    fallback = "fallback",      // 业务异常
-    blockHandler = "handleBlock" // 限流/熔断
-)
-public User getUser(Long id) {
-    if (id == null) {
-        throw new IllegalArgumentException("id不能为空");
-    }
-    return userDao.findById(id);
-}
-
-public User fallback(Long id, Throwable ex) {
-    return new User(-1L, "默认用户");
-}
-
-// 熔断规则
-DegradeRule rule = new DegradeRule();
-rule.setResource("getUser");
-rule.setGrade(CircuitBreakerStrategy.ERROR_RATIO.getType());
-rule.setCount(0.5);  // 错误比例50%
-rule.setTimeWindow(10);  // 熔断持续10秒
-rule.setMinRequestAmount(10);  // 最小请求数
-DegradeRuleManager.loadRules(Collections.singletonList(rule));
-```
-
-## 异步处理
-
-### 消息队列削峰
-
-```java
-// 下单场景
-@Service
-public class OrderService {
-
-    @Autowired
-    private KafkaTemplate<String, Order> kafkaTemplate;
-
-    // 接收请求，快速返回
-    public String createOrder(OrderDTO dto) {
-        String orderId = UUID.randomUUID().toString();
-        dto.setOrderId(orderId);
-
-        // 发送到消息队列
-        kafkaTemplate.send("order-topic", orderId, dto);
-
-        return orderId;  // 立即返回订单ID
-    }
-}
-
-// 异步处理
-@KafkaListener(topics = "order-topic")
-public void processOrder(OrderDTO dto) {
-    // 扣减库存
-    inventoryService.deduct(dto.getProductId(), dto.getQuantity());
-
-    // 创建订单
-    orderDao.insert(new Order(dto));
-
-    // 发送通知
-    notificationService.send(dto.getUserId(), "订单创建成功");
-}
-```
-
-## 数据库优化
-
-### 读写分离
+## 限流——保护系统不被打爆
 
 ```
-┌─────────────┐
-│   写请求    │ → Master
-└─────────────┘
-┌─────────────┐
-│   读请求    │ → Slave1 / Slave2 / Slave3
-└─────────────┘
+限流算法：
+
+1. 计数器（固定窗口）
+   - 简单但有临界问题（窗口边界瞬间流量翻倍）
+   - 适合：粗粒度限流
+
+2. 滑动窗口
+   - 解决了固定窗口的临界问题
+   - 适合：API 限流
+
+3. 令牌桶（Token Bucket）
+   - 固定速率生成令牌，请求需要获取令牌
+   - 允许突发流量（桶中有积累的令牌）
+   - 适合：大多数场景（Sentinel 默认）
+
+4. 漏桶（Leaky Bucket）
+   - 固定速率处理请求，多余的请求排队或丢弃
+   - 削峰填谷
+   - 适合：流量整形
 ```
 
-### 分库分表
-
-```java
-// 水平分表
-orders_202401, orders_202402, orders_202403
-
-// 垂直分库
-user_db, order_db, product_db
-
-// ShardingSphere配置
-spring:
-  shardingsphere:
-    datasource:
-      names: ds0,ds1
-      ds0:
-        type: com.zaxxer.hikari.HikariDataSource
-        driver-class-name: com.mysql.cj.jdbc.Driver
-        jdbc-url: jdbc:mysql://localhost:3306/db0
-      ds1:
-        type: com.zaxxer.hikari.HikariDataSource
-        driver-class-name: com.mysql.cj.jdbc.Driver
-        jdbc-url: jdbc:mysql://localhost:3306/db1
-    rules:
-      sharding:
-        tables:
-          t_order:
-            actual-data-nodes: ds$->{0..1}.t_order_$->{0..1}
-            table-strategy:
-              standard:
-                sharding-column: order_id
-                sharding-algorithm-name: t_order_inline
-```
-
-## CDN加速
+## 异步——消息队列的核心价值
 
 ```
-用户 → CDN边缘节点 → 源站
-       (就近访问)
+同步调用的问题：
+  用户下单 → 创建订单 → 扣库存 → 发通知 → 加积分 → 写日志
+  总耗时 = 所有步骤之和 → 用户等很久
+
+异步化：
+  用户下单 → 创建订单 → 扣库存 → 返回"下单成功"
+                                    ↓（异步）
+                              MQ → 发通知、加积分、写日志
+  用户感知的耗时 = 核心链路耗时
+
+但异步带来了新问题：
+  - 消息丢失怎么办？（发送端确认 + MQ 持久化 + 消费端手动 ACK）
+  - 消息重复怎么办？（消费端幂等性设计）
+  - 消息顺序怎么办？（单队列单消费者 / 消息带序号）
 ```
 
-## 小结
+## 数据库——最后的防线
 
-| 策略 | 说明 |
-|------|------|
-| 缓存 | 多级缓存，减少数据库压力 |
-| 限流 | 保护系统，防止过载 |
-| 熔断 | 快速失败，防止雪崩 |
-| 异步 | 消息队列，削峰填谷 |
-| 分库分表 | 数据分片，水平扩展 |
-| CDN | 静态资源加速 |
+```
+读写分离：
+  写 → Master
+  读 → Slave（多个）
+  问题：主从延迟（写入后立刻读可能读不到）
+
+分库分表：
+  水平分库：按用户 ID 分到不同库
+  水平分表：单表数据量 > 5000 万行时分表
+  问题：跨库查询、跨库事务、数据迁移
+
+什么时候需要分库分表？
+  - 单表数据量 > 5000 万行
+  - 单库 QPS > 5000
+  - 单表超过 2GB
+
+分库分表的代价：
+  - 复杂度剧增（跨库 JOIN、跨库事务、全局 ID）
+  - 运维成本高（数据迁移、扩容）
+  - 能不分就不分（先优化 SQL、加缓存、读写分离）
+```
+
+## 面试高频题
+
+**Q1：秒杀系统怎么设计？**
+
+核心：限流 + 缓存 + 异步。前端：按钮防重复点击、验证码分流。网关：限流（令牌桶）。Service 层：库存预扣（Redis DECR），下单请求入 MQ 异步处理。MQ 消费者：真正扣库存、创建订单。数据库：乐观锁（版本号）防超卖。
+
+**Q2：如何设计一个分布式限流？**
+
+Redis + Lua 脚本实现令牌桶：用 `INCR` 和 `EXPIRE` 控制窗口内的请求数。Redisson 的 `RRateLimiter` 已实现。Sentinel 集群限流配合 Token Server。网关层用 Nginx 的 `limit_req` 做第一层限流。
+
+## 延伸阅读
+
+- [微服务架构](microservice.md) — 服务拆分、服务治理
+- [Redis](../database/redis.md) — 缓存实战、常见问题
+- [消息队列](../distributed/mq.md) — RocketMQ/Kafka 原理

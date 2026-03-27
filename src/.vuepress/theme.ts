@@ -59,6 +59,10 @@ export default hopeTheme({
   plugins: {
     blog: true,
 
+    icon: {
+      assets: "iconify",
+    },
+
     copyright: {
       author: "coolzhul",
       license: "MIT",

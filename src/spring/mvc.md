@@ -12,22 +12,14 @@ tag:
 
 # Spring MVC
 
-Spring MVC是基于Java的轻量级Web框架，实现了MVC设计模式。
+> Spring MVC 是 Java Web 开发的事实标准。但很多人只停留在 `@GetMapping` + `@PostMapping` 的层面——参数校验怎么做全局处理？统一响应格式怎么包装？拦截器和过滤器的区别是什么？这些才是实际开发中每天要面对的问题。
 
-## 核心组件
+## 基础入门：Spring MVC 是什么？
 
-```java
-// MVC架构流程
-请求 → DispatcherServlet → HandlerMapping → Controller
-                                           ↓
-视图 ← ViewResolver ← ModelAndView ← Controller
-```
-
-## Controller开发
-
-### RESTful API
+### 一个 RESTful API 的完整流程
 
 ```java
+// Controller：接收请求、返回响应
 @RestController
 @RequestMapping("/api/users")
 public class UserController {
@@ -35,84 +27,109 @@ public class UserController {
     @Autowired
     private UserService userService;
 
-    // GET - 查询列表
-    @GetMapping
-    public List<User> list() {
-        return userService.findAll();
-    }
-
-    // GET - 查询详情
+    // GET /api/users/1
     @GetMapping("/{id}")
-    public User get(@PathVariable Long id) {
+    public User getUser(@PathVariable Long id) {
         return userService.findById(id);
     }
 
-    // POST - 创建
+    // POST /api/users
     @PostMapping
-    @ResponseStatus(HttpStatus.CREATED)
-    public User create(@RequestBody @Valid UserDTO dto) {
-        return userService.create(dto);
+    public User create(@RequestBody @Valid CreateUserRequest request) {
+        return userService.create(request);
     }
 
-    // PUT - 更新
+    // PUT /api/users/1
     @PutMapping("/{id}")
-    public User update(@PathVariable Long id, @RequestBody @Valid UserDTO dto) {
-        return userService.update(id, dto);
+    public User update(@PathVariable Long id, @RequestBody UpdateUserRequest request) {
+        return userService.update(id, request);
     }
 
-    // DELETE - 删除
+    // DELETE /api/users/1
     @DeleteMapping("/{id}")
-    @ResponseStatus(HttpStatus.NO_CONTENT)
     public void delete(@PathVariable Long id) {
         userService.delete(id);
     }
 }
 ```
 
-### 参数绑定
+### 常用注解
+
+| 注解 | 作用 | 示例 |
+|------|------|------|
+| `@RestController` | `@Controller` + `@ResponseBody` | 返回 JSON |
+| `@GetMapping` | 处理 GET 请求 | `@GetMapping("/users")` |
+| `@PostMapping` | 处理 POST 请求 | `@PostMapping("/users")` |
+| `@PathVariable` | URL 路径参数 | `/users/{id}` |
+| `@RequestParam` | 查询参数 | `?name=张三` |
+| `@RequestBody` | 请求体 JSON → 对象 | POST 的 JSON body |
+| `@Valid` | 触发参数校验 | 配合 JSR 380 注解 |
+
+---
+
+## 请求处理全流程
+
+```
+浏览器请求
+    │
+    ▼
+DispatcherServlet（前端控制器，所有请求的入口）
+    │
+    ├→ HandlerMapping（找到对应的 Controller 方法）
+    │
+    ├→ HandlerAdapter（执行 Controller 方法）
+    │       │
+    │       ├→ 参数绑定（@PathVariable、@RequestParam、@RequestBody...）
+    │       ├→ 参数校验（@Valid、@Validated）
+    │       ├→ 执行业务代码
+    │       └→ 返回值处理（@ResponseBody → JSON 序列化）
+    │
+    ├→ ViewResolver（如果返回视图名，解析为具体视图）
+    │   或 HttpMessageConverter（如果返回 @ResponseBody，直接写响应体）
+    │
+    └→ 返回响应
+```
+
+::: tip DispatcherServlet 是 Spring MVC 的大脑
+所有请求都经过 `DispatcherServlet`，它协调各个组件完成请求处理。理解了这个流程，你就知道 `@RequestBody` 的参数是从哪里绑定的、`@RestControllerAdvice` 的异常处理是在哪一步介入的、拦截器是在哪一步执行的。
+:::
+
+## RESTful API 设计
+
+### 参数接收的几种方式
 
 ```java
 @RestController
-public class ParamController {
+@RequestMapping("/api/users")
+public class UserController {
 
-    // 路径变量
-    @GetMapping("/users/{id}/posts/{postId}")
-    public void get(@PathVariable Long id, @PathVariable Long postId) {}
+    // @PathVariable——路径参数（资源定位）
+    @GetMapping("/{id}")
+    public User getById(@PathVariable Long id) { }
 
-    // 请求参数
-    @GetMapping("/search")
-    public void search(
-        @RequestParam String keyword,
+    // @RequestParam——查询参数（过滤、分页）
+    @GetMapping
+    public Page<User> list(
         @RequestParam(defaultValue = "0") int page,
-        @RequestParam(defaultValue = "10") int size
-    ) {}
+        @RequestParam(defaultValue = "10") int size,
+        @RequestParam(required = false) String keyword) { }
 
-    // 请求头
-    @GetMapping("/header")
-    public void header(
-        @RequestHeader("User-Agent") String userAgent,
-        @RequestHeader(value = "X-Token", required = false) String token
-    ) {}
+    // @RequestBody——请求体（JSON → 对象）
+    @PostMapping
+    public User create(@RequestBody @Valid UserDTO dto) { }
 
-    // Cookie
-    @GetMapping("/cookie")
-    public void cookie(@CookieValue("JSESSIONID") String sessionId) {}
-
-    // 请求体
-    @PostMapping("/body")
-    public void body(@RequestBody String content) {}
-
-    // 表单数据
-    @PostMapping("/form")
-    public void form(@ModelAttribute UserDTO dto) {}
-
-    // 多参数封装
-    @GetMapping("/page")
-    public void page(Pageable pageable) {
-        // page=0&size=10&sort=name,desc
-    }
+    // @RequestHeader——请求头（认证 Token 等）
+    @GetMapping("/me")
+    public User getCurrentUser(
+        @RequestHeader("Authorization") String token) { }
 }
 ```
+
+::: warning 常见参数绑定错误
+1. `@RequestParam` 拼写错误写成 `@Param`（MyBatis 的注解，Spring MVC 不认）→ 400 错误
+2. `@RequestBody` 用在了 GET 请求上 → GET 请求没有请求体，参数永远为 null
+3. 日期参数没指定格式：`@DateTimeFormat(pattern = "yyyy-MM-dd")` → 默认格式解析失败
+:::
 
 ### 参数校验
 
@@ -120,78 +137,72 @@ public class ParamController {
 @Data
 public class UserDTO {
     @NotBlank(message = "用户名不能为空")
-    @Size(min = 3, max = 50, message = "用户名长度3-50")
+    @Size(min = 3, max = 50)
     private String username;
 
-    @NotBlank(message = "邮箱不能为空")
     @Email(message = "邮箱格式不正确")
     private String email;
 
-    @Min(value = 18, message = "年龄不能小于18")
-    @Max(value = 100, message = "年龄不能大于100")
+    @Min(18) @Max(100)
     private Integer age;
-
-    @Pattern(regexp = "^1[3-9]\\d{9}$", message = "手机号格式不正确")
-    private String phone;
 }
 
-@RestController
-@RequestMapping("/api/users")
-@Validated
-public class UserController {
-
-    @PostMapping
-    public User create(@RequestBody @Valid UserDTO dto) {
-        return userService.create(dto);
-    }
-
-    // 方法级校验
-    @GetMapping("/search")
-    public void search(@RequestParam @Size(min = 2) String keyword) {}
+// Controller 中加 @Valid
+@PostMapping
+public User create(@RequestBody @Valid UserDTO dto) {
+    return userService.create(dto);
 }
 
-// 全局异常处理
-@RestControllerAdvice
-public class ValidationExceptionHandler {
-
-    @ExceptionHandler(MethodArgumentNotValidException.class)
-    @ResponseStatus(HttpStatus.BAD_REQUEST)
-    public Map<String, String> handleValidation(MethodArgumentNotValidException ex) {
-        Map<String, String> errors = new HashMap<>();
-        ex.getBindingResult().getFieldErrors().forEach(error ->
-            errors.put(error.getField(), error.getDefaultMessage())
-        );
-        return errors;
-    }
-}
+// 校验失败 → 抛出 MethodArgumentNotValidException
+// 需要 @RestControllerAdvice 统一处理（见下文）
 ```
 
-## 响应处理
-
-### ResponseEntity
+## 全局异常处理——每个项目都必须有
 
 ```java
-@GetMapping("/{id}")
-public ResponseEntity<User> get(@PathVariable Long id) {
-    User user = userService.findById(id);
-    if (user == null) {
-        return ResponseEntity.notFound().build();
-    }
-    return ResponseEntity.ok()
-        .header("X-Custom", "value")
-        .body(user);
-}
+@RestControllerAdvice
+public class GlobalExceptionHandler {
 
-@PostMapping
-public ResponseEntity<User> create(@RequestBody UserDTO dto) {
-    User user = userService.create(dto);
-    return ResponseEntity
-        .created(URI.create("/api/users/" + user.getId()))
-        .body(user);
+    // 参数校验失败
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public Result<Map<String, String>> handleValidation(MethodArgumentNotValidException ex) {
+        Map<String, String> errors = new LinkedHashMap<>();
+        ex.getBindingResult().getFieldErrors().forEach(err ->
+            errors.put(err.getField(), err.getDefaultMessage())
+        );
+        return Result.error(400, "参数校验失败", errors);
+    }
+
+    // 业务异常
+    @ExceptionHandler(BusinessException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public Result<Void> handleBusiness(BusinessException ex) {
+        return Result.error(ex.getCode(), ex.getMessage());
+    }
+
+    // 资源不存在
+    @ExceptionHandler(NoHandlerFoundException.class)
+    @ResponseStatus(HttpStatus.NOT_FOUND)
+    public Result<Void> handleNotFound(NoHandlerFoundException ex) {
+        return Result.error(404, "接口不存在");
+    }
+
+    // 兜底异常
+    @ExceptionHandler(Exception.class)
+    @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
+    public Result<Void> handleException(Exception ex) {
+        log.error("未预期的异常", ex);
+        return Result.error(500, "系统错误");
+    }
 }
 ```
 
-### 统一响应格式
+::: danger 不要吞掉异常
+`@ExceptionHandler` 最常见的错误是把所有异常都返回"系统错误"但日志里什么都没打。线上排查问题时，没有异常堆栈等于没有线索。**至少在兜底异常处理里打 error 级别日志。**
+:::
+
+## 统一响应格式
 
 ```java
 @Data
@@ -201,7 +212,7 @@ public class Result<T> {
     private String message;
     private T data;
 
-    public static <T> Result<T> success(T data) {
+    public static <T> Result<T> ok(T data) {
         return new Result<>(200, "success", data);
     }
 
@@ -209,175 +220,43 @@ public class Result<T> {
         return new Result<>(code, message, null);
     }
 }
-
-@RestControllerAdvice
-public class ResponseAdvice implements ResponseBodyAdvice<Object> {
-
-    @Override
-    public boolean supports(MethodParameter returnType, Class converterType) {
-        return !returnType.getParameterType().equals(Result.class);
-    }
-
-    @Override
-    public Object beforeBodyWrite(Object body, MethodParameter returnType,
-            MediaType selectedContentType, Class selectedConverterType,
-            ServerHttpRequest request, ServerHttpResponse response) {
-        return Result.success(body);
-    }
-}
 ```
 
-## 异常处理
+::: tip 统一响应的两种方式
+1. Controller 方法手动包装 `Result.ok(data)`——简单直接，但每个方法都要写
+2. `ResponseBodyAdvice` 自动包装——所有返回值自动包装，但要注意不要包装已经是 Result 类型的返回值（需要 `supports()` 方法判断）
+:::
 
-```java
-@RestControllerAdvice
-public class GlobalExceptionHandler {
+## 拦截器 vs 过滤器
 
-    @ExceptionHandler(EntityNotFoundException.class)
-    @ResponseStatus(HttpStatus.NOT_FOUND)
-    public Result<Void> handleNotFound(EntityNotFoundException e) {
-        return Result.error(404, e.getMessage());
-    }
+```
+请求 → Filter → Servlet → DispatcherServlet → Interceptor → Controller → Interceptor → Servlet → Filter → 响应
 
-    @ExceptionHandler(MethodArgumentNotValidException.class)
-    @ResponseStatus(HttpStatus.BAD_REQUEST)
-    public Result<Map<String, String>> handleValidation(MethodArgumentNotValidException e) {
-        Map<String, String> errors = new HashMap<>();
-        e.getBindingResult().getFieldErrors().forEach(err ->
-            errors.put(err.getField(), err.getDefaultMessage())
-        );
-        return Result.error(400, "参数校验失败");
-    }
+Filter（Servlet 规范）：
+  - 在 DispatcherServlet 之前执行
+  - 可以修改 request/response
+  - 适合：编码转换、CORS、请求日志、安全认证
 
-    @ExceptionHandler(AccessDeniedException.class)
-    @ResponseStatus(HttpStatus.FORBIDDEN)
-    public Result<Void> handleAccessDenied(AccessDeniedException e) {
-        return Result.error(403, "无权限");
-    }
+Interceptor（Spring MVC）：
+  - 在 DispatcherServlet 之后、Controller 之前执行
+  - 可以注入 Spring Bean
+  - 适合：权限校验、登录检查、请求耗时统计
 
-    @ExceptionHandler(Exception.class)
-    @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
-    public Result<Void> handleException(Exception e) {
-        log.error("系统异常", e);
-        return Result.error(500, "系统错误");
-    }
-}
+选择建议：需要和 Spring 容器交互的用 Interceptor，否则用 Filter
 ```
 
-## 拦截器
+## 面试高频题
 
-```java
-@Component
-public class AuthInterceptor implements HandlerInterceptor {
+**Q1：@Controller 和 @RestController 的区别？**
 
-    @Override
-    public boolean preHandle(HttpServletRequest request, HttpServletResponse response,
-            Object handler) throws Exception {
-        String token = request.getHeader("Authorization");
-        if (token == null) {
-            response.sendError(HttpServletResponse.SC_UNAUTHORIZED);
-            return false;
-        }
-        // 验证token...
-        return true;
-    }
+`@RestController` = `@Controller` + `@ResponseBody`。`@Controller` 的方法返回值会被 ViewResolver 解析为视图（如 JSP、Thymeleaf）。`@RestController` 的方法返回值直接通过 HttpMessageConverter 写入响应体（如 JSON）。前后端分离项目都用 `@RestController`。
 
-    @Override
-    public void postHandle(HttpServletRequest request, HttpServletResponse response,
-            Object handler, ModelAndView modelAndView) {
-        // 请求处理后
-    }
+**Q2：@RequestParam 和 @PathVariable 的区别？**
 
-    @Override
-    public void afterCompletion(HttpServletRequest request, HttpServletResponse response,
-            Object handler, Exception ex) {
-        // 请求完成后
-    }
-}
+`@RequestParam` 从查询参数中取值（`/users?name=张三`）。`@PathVariable` 从 URL 路径中取值（`/users/123`）。RESTful 风格推荐用 `@PathVariable` 定位资源，`@RequestParam` 做过滤和分页。
 
-@Configuration
-public class WebConfig implements WebMvcConfigurer {
+## 延伸阅读
 
-    @Autowired
-    private AuthInterceptor authInterceptor;
-
-    @Override
-    public void addInterceptors(InterceptorRegistry registry) {
-        registry.addInterceptor(authInterceptor)
-            .addPathPatterns("/api/**")
-            .excludePathPatterns("/api/auth/**");
-    }
-}
-```
-
-## 跨域配置
-
-```java
-@Configuration
-public class CorsConfig implements WebMvcConfigurer {
-
-    @Override
-    public void addCorsMappings(CorsRegistry registry) {
-        registry.addMapping("/api/**")
-            .allowedOrigins("https://example.com")
-            .allowedMethods("GET", "POST", "PUT", "DELETE")
-            .allowedHeaders("*")
-            .allowCredentials(true)
-            .maxAge(3600);
-    }
-}
-
-// 或使用注解
-@CrossOrigin(origins = "https://example.com")
-@RestController
-public class ApiController {}
-```
-
-## 文件上传下载
-
-```java
-@RestController
-@RequestMapping("/api/files")
-public class FileController {
-
-    @PostMapping("/upload")
-    public String upload(@RequestParam("file") MultipartFile file) throws IOException {
-        String filename = UUID.randomUUID() + "_" + file.getOriginalFilename();
-        Path path = Paths.get("uploads", filename);
-        Files.createDirectories(path.getParent());
-        Files.copy(file.getInputStream(), path);
-        return filename;
-    }
-
-    @GetMapping("/download/{filename}")
-    public void download(@PathVariable String filename, HttpServletResponse response)
-            throws IOException {
-        Path path = Paths.get("uploads", filename);
-        response.setContentType("application/octet-stream");
-        response.setHeader("Content-Disposition",
-            "attachment; filename=\"" + filename + "\"");
-        Files.copy(path, response.getOutputStream());
-    }
-}
-
-// 配置文件大小限制
-spring:
-  servlet:
-    multipart:
-      max-file-size: 10MB
-      max-request-size: 100MB
-```
-
-## 小结
-
-| 组件 | 说明 |
-|------|------|
-| @RestController | RESTful控制器 |
-| @RequestMapping | URL映射 |
-| @PathVariable | 路径变量 |
-| @RequestParam | 请求参数 |
-| @RequestBody | 请求体 |
-| @Valid | 参数校验 |
-| ResponseEntity | 响应实体 |
-| @RestControllerAdvice | 全局异常处理 |
-| HandlerInterceptor | 拦截器 |
+- 上一篇：[Spring Boot](boot.md) — 自动配置、Starter 原理
+- 下一篇：[Spring Cloud](cloud.md) — 微服务架构、服务治理
+- [Spring Security](security.md) — JWT 认证、权限控制

@@ -3,222 +3,140 @@ title: 消息队列
 icon: queue
 order: 1
 category:
-  - 分布式
+  - 分布式技术
 tag:
   - 消息队列
+  - RocketMQ
   - Kafka
-  - RabbitMQ
 ---
 
 # 消息队列
 
-消息队列实现异步通信，解耦生产者和消费者。
+> 消息队列（MQ）的核心价值就三个字：**解耦、异步、削峰**。但引入 MQ 也引入了复杂性——消息丢失、消息重复、消息顺序、消息堆积。这篇文章帮你理清 MQ 的核心问题和选型。
 
-## 消息队列对比
+## 基础入门：消息队列是什么？
 
-| 特性 | Kafka | RabbitMQ | RocketMQ |
-|------|-------|----------|----------|
-| 吞吐量 | 极高 | 中等 | 高 |
-| 延迟 | 毫秒级 | 微秒级 | 毫秒级 |
-| 持久化 | 支持 | 支持 | 支持 |
-| 事务 | 支持 | 支持 | 支持 |
-| 适用场景 | 日志、大数据 | 业务消息 | 电商、金融 |
-
-## RabbitMQ
-
-### 基本概念
+### 一句话理解 MQ
 
 ```
-Producer → Exchange → Queue → Consumer
-              ↓
-           Routing Key
+MQ 就是一个"消息中转站"：
+生产者把消息放进去 → 消费者从里面取出来
+
+就像快递柜：
+你把包裹放进去（生产）→ 快递员取出来（消费）
+你不需要知道快递员是谁，快递员也不需要认识你 → 解耦
 ```
 
-### 交换机类型
+### 三大核心价值
 
-| 类型 | 说明 |
-|------|------|
-| Direct | 精确匹配路由键 |
-| Fanout | 广播到所有队列 |
-| Topic | 模式匹配路由键 |
-| Headers | 根据消息头匹配 |
+| 价值 | 说明 | 场景 |
+|------|------|------|
+| 解耦 | 生产者和消费者不直接调用 | 订单服务发 MQ → 通知/积分/日志服务各自消费 |
+| 异步 | 非核心操作异步化 | 下单后发 MQ → 异步发邮件、加积分 |
+| 削峰 | 缓冲突发流量 | 秒杀请求入 MQ → 消费者按能力处理 |
 
-### Spring Boot集成
+---
 
-```yaml
-spring:
-  rabbitmq:
-    host: localhost
-    port: 5672
-    username: guest
-    password: guest
+
+## MQ 解决什么问题？
+
+```
+1. 解耦：生产者和消费者不需要直接调用
+   订单服务 → MQ → 通知服务、积分服务、日志服务
+   新增消费者？加个订阅就行，不用改订单服务
+
+2. 异步：非核心操作异步化
+   用户下单 → 发 MQ → 立即返回"下单成功"
+   MQ 消费者 → 扣库存、发通知、加积分（异步执行）
+
+3. 削峰填谷：应对突发流量
+   秒杀时 10000 QPS → MQ 缓冲 → 消费者按能力消费（如 1000 QPS）
+   数据库不会被瞬间压垮
 ```
 
-```java
-@Configuration
-public class RabbitConfig {
+## 三大经典问题
 
-    @Bean
-    public Queue queue() {
-        return new Queue("order.queue", true);
-    }
+### 消息丢失
 
-    @Bean
-    public DirectExchange exchange() {
-        return new DirectExchange("order.exchange");
-    }
+```
+生产者 → MQ → 消费者，三个环节都可能丢
 
-    @Bean
-    public Binding binding() {
-        return BindingBuilder.bind(queue())
-            .to(exchange())
-            .with("order.created");
-    }
-}
+1. 生产者发消息失败
+   → RocketMQ：同步发送 + 重试
+   → Kafka：acks=all（所有 ISR 副本确认）
 
-// 生产者
-@Service
-@RequiredArgsConstructor
-public class OrderProducer {
-    private final RabbitTemplate rabbitTemplate;
+2. MQ 自身丢失
+   → 持久化：刷盘策略（同步刷盘 vs 异步刷盘）
+   → 副本：至少 2 个副本
 
-    public void sendOrder(Order order) {
-        rabbitTemplate.convertAndSend(
-            "order.exchange",
-            "order.created",
-            order
-        );
-    }
-}
+3. 消费者处理失败
+   → 手动 ACK：处理成功才确认
+   → 重试机制：失败后重试（注意重试次数和间隔）
+```
 
-// 消费者
-@Component
-public class OrderConsumer {
+### 消息重复（幂等性）
 
-    @RabbitListener(queues = "order.queue")
-    public void handleOrder(Order order) {
-        System.out.println("收到订单: " + order);
+```
+消费者收到了重复消息 → 业务操作必须是幂等的
+
+幂等方案：
+- 数据库唯一约束（INSERT ... ON DUPLICATE KEY UPDATE）
+- Redis SETNX（分布式锁）
+- 全局 ID + 状态判断（先查状态，已处理就跳过）
+- 数据库乐观锁（版本号）
+
+// RocketMQ 消费者幂等示例
+@RocketMQMessageListener(topic = "order", consumerGroup = "order-group")
+public class OrderConsumer implements RocketMQListener<OrderMessage> {
+    @Override
+    public void onMessage(OrderMessage msg) {
+        // 用消息 ID 做幂等判断
+        if (orderService.existsByMsgId(msg.getMsgId())) {
+            return;  // 已处理过，跳过
+        }
+        orderService.process(msg);
     }
 }
 ```
 
-## Kafka
-
-### 基本概念
+### 消息顺序
 
 ```
-Producer → Topic → Partition → Consumer Group
-                           ↓
-                        Replica
+RocketMQ：同一个订单的消息发到同一个 Queue → 单消费者顺序消费
+Kafka：同一个 key 的消息发到同一个 Partition → 单消费者顺序消费
+
+注意：全局顺序 = 单 Partition 单 Consumer → 吞吐量极低
+实际做法：只保证局部顺序（同一订单/用户的消息有序）
 ```
 
-### Spring Boot集成
+## 选型对比
 
-```yaml
-spring:
-  kafka:
-    bootstrap-servers: localhost:9092
-    producer:
-      key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
-    consumer:
-      group-id: order-group
-      auto-offset-reset: earliest
-      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
-```
+| 特性 | RocketMQ | Kafka | RabbitMQ |
+|------|----------|-------|----------|
+| 语言 | Java | Scala | Erlang |
+| 吞吐量 | 10万级 | 100万级 | 万级 |
+| 延迟 | ms级 | ms级 | μs级 |
+| 消息可靠性 | 高（支持事务消息） | 高（acks配置） | 高 |
+| 顺序消息 | 支持 | 分区内有序 | 不保证 |
+| 延时消息 | 支持 | 不支持 | 不支持（插件） |
+| 适用场景 | 业务消息（订单、支付） | 日志、大数据 | 复杂路由 |
 
-```java
-// 生产者
-@Service
-@RequiredArgsConstructor
-public class OrderProducer {
-    private final KafkaTemplate<String, Order> kafkaTemplate;
+::: tip 选型建议
+电商/金融业务消息 → RocketMQ（功能完善，支持事务消息）。日志采集/大数据 → Kafka（吞吐量最高）。小项目/复杂路由 → RabbitMQ。大多数 Java 后端项目选 RocketMQ 就对了。
+:::
 
-    public void sendOrder(Order order) {
-        kafkaTemplate.send("orders", order.getId(), order);
-    }
-}
+## 面试高频题
 
-// 消费者
-@Component
-public class OrderConsumer {
+**Q1：如何保证消息不丢失？**
 
-    @KafkaListener(topics = "orders", groupId = "order-group")
-    public void consume(ConsumerRecord<String, Order> record) {
-        Order order = record.value();
-        System.out.println("收到订单: " + order);
-    }
-}
-```
+三端保证：生产端用同步发送 + 重试，MQ 端用持久化 + 多副本，消费端用手动 ACK + 重试。RocketMQ 的事务消息可以进一步保证生产端和 MQ 端的一致性。
 
-## 消息可靠性
+**Q2：消息堆积怎么处理？**
 
-### 生产者确认
+先定位堆积原因（消费者太慢？生产者突发？）。应急：临时增加消费者实例。根治：优化消费逻辑、增加消费并行度、检查是否有慢 SQL。
 
-```java
-// RabbitMQ
-rabbitTemplate.setConfirmCallback((correlationData, ack, cause) -> {
-    if (!ack) {
-        // 发送失败，重试或记录日志
-    }
-});
+## 延伸阅读
 
-// Kafka
-@Configuration
-public class KafkaConfig {
-    @Bean
-    public ProducerFactory<String, String> producerFactory() {
-        Map<String, Object> props = new HashMap<>();
-        props.put(ProducerConfig.ACKS_CONFIG, "all");  // 所有副本确认
-        return new DefaultKafkaProducerFactory<>(props);
-    }
-}
-```
-
-### 消费者确认
-
-```java
-// RabbitMQ手动确认
-@RabbitListener(queues = "order.queue", ackMode = "MANUAL")
-public void handleOrder(Order order, Channel channel,
-        @Header(AmqpHeaders.DELIVERY_TAG) long tag) throws IOException {
-    try {
-        processOrder(order);
-        channel.basicAck(tag, false);
-    } catch (Exception e) {
-        channel.basicNack(tag, false, true);  // 重新入队
-    }
-}
-```
-
-### 死信队列
-
-```java
-@Configuration
-public class DeadLetterConfig {
-
-    @Bean
-    public Queue deadLetterQueue() {
-        return QueueBuilder.durable("dlq")
-            .build();
-    }
-
-    @Bean
-    public Queue orderQueue() {
-        return QueueBuilder.durable("order.queue")
-            .deadLetterExchange("")  // 默认交换机
-            .deadLetterRoutingKey("dlq")
-            .build();
-    }
-}
-```
-
-## 小结
-
-| 特性 | 说明 |
-|------|------|
-| 解耦 | 生产者和消费者独立 |
-| 异步 | 提高响应速度 |
-| 削峰 | 平滑流量高峰 |
-| 可靠 | 消息持久化和确认 |
+- [分布式事务](transaction.md) — Seata、TCC、Saga
+- [RPC框架](rpc.md) — gRPC、Dubbo
+- [高并发架构](../architecture/high-concurrency.md) — 异步化策略

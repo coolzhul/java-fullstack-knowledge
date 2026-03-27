@@ -10,327 +10,198 @@ tag:
   - 垃圾回收
 ---
 
-# 垃圾回收
+# 垃圾回收（GC）
 
-垃圾回收（Garbage Collection）是JVM自动管理内存的机制，理解GC对于性能优化至关重要。
+> GC 不是"垃圾"回收，是"不可达对象"回收。Java 程序员不用手动 free 内存，但如果你不理解 GC 的工作原理，就无法定位线上频繁 Full GC、OOM、停顿超时等问题。这篇文章从"怎么判断对象该回收"到"怎么选 GC 收集器"，建立完整的知识体系。
 
-## 对象存活判定
+## 对象怎么判断"该死了"？
 
-### 引用计数法
+### 可达性分析——GC 的判定标准
+
+```
+从 GC Roots 出发，沿着引用链遍历
+能到达的对象 → 存活
+不可达的对象 → 可回收
+
+GC Roots 包括：
+- 虚拟机栈中的局部变量
+- 方法区中的静态变量
+- 方法区中的常量
+- 本地方法栈中的 JNI 引用
+```
+
+::: tip 为什么 Java 不用引用计数？
+引用计数法有一个致命问题：循环引用。A 引用 B，B 引用 A，两者的计数器都不为 0，但实际上它们已经不可达了。Python 用引用计数 + 弱引用来解决，Java 直接用可达性分析，天然没有循环引用问题。
+:::
+
+### 四种引用强度
 
 ```java
-// 引用计数法（Python使用，Java不使用）
-// 问题：循环引用无法回收
-class ReferenceCountingGC {
-    public Object instance = null;
-}
+// 强引用：绝对不会被回收（只要引用还在）
+Object strong = new Object();
 
-public void test() {
-    ReferenceCountingGC a = new ReferenceCountingGC();
-    ReferenceCountingGC b = new ReferenceCountingGC();
-    a.instance = b;
-    b.instance = a;
-    a = null;
-    b = null;
-    // 循环引用，但应该被回收
-}
+// 软引用（SoftReference）：内存不足时才回收
+// 适合做缓存
+SoftReference<byte[]> cache = new SoftReference<>(new byte[1024 * 1024]);
+
+// 弱引用（WeakReference）：下次 GC 时就回收
+// 适合做 ThreadLocal 的 key、WeakHashMap
+WeakReference<Object> weak = new WeakReference<>(new Object());
+
+// 虚引用（PhantomReference）：不影响对象生命周期
+// 唯一用途：对象被 GC 回收时收到通知（通过 ReferenceQueue）
+// 用于管理堆外内存（DirectByteBuffer 的清理）
 ```
 
-### 可达性分析
+## GC 算法——三种基础算法
 
-JVM使用可达性分析来判断对象是否存活。
-
-```java
-// GC Roots包括：
-// 1. 虚拟机栈中引用的对象
-// 2. 方法区中类静态属性引用的对象
-// 3. 方法区中常量引用的对象
-// 4. 本地方法栈中JNI引用的对象
-
-public class GCRootsDemo {
-    private static Object staticVar;       // GC Root
-    private static final Object CONST = new Object();  // GC Root
-
-    public void method() {
-        Object localVar = new Object();    // GC Root（栈帧中）
-    }
-}
+```mermaid
+graph LR
+    subgraph MS["标记-清除 Mark-Sweep"]
+        MS1["✅ 简单"]
+        MS2["❌ 产生内存碎片"]
+    end
+    subgraph CP["复制 Copying"]
+        CP1["✅ 无碎片"]
+        CP2["❌ 浪费 50% 内存"]
+    end
+    subgraph MC["标记-整理 Mark-Compact"]
+        MC1["✅ 无碎片"]
+        MC2["✅ 利用率高"]
+        MC3["❌ 移动开销大"]
+    end
+    MS -->|"年轻代"| CP
+    CP -->|"老年代"| MC
 ```
 
-### 引用类型
+```
+标记-清除（Mark-Sweep）：
+  ✅ 简单
+  ❌ 产生内存碎片 → 大对象可能分配失败
 
-```java
-import java.lang.ref.*;
+复制（Copying）：
+  ✅ 无碎片，分配快（指针碰撞）
+  ❌ 浪费一半内存
+  → 年轻代用的就是复制算法（Eden + 2 个 Survivor）
 
-public class ReferenceTypesDemo {
-    public static void main(String[] args) {
-        // 强引用 - 不会被回收
-        Object strongRef = new Object();
-
-        // 软引用 - 内存不足时回收
-        SoftReference<byte[]> softRef = new SoftReference<>(new byte[1024 * 1024]);
-
-        // 弱引用 - 下次GC时回收
-        WeakReference<Object> weakRef = new WeakReference<>(new Object());
-
-        // 虚引用 - 无法通过虚引用获取对象，用于跟踪GC
-        ReferenceQueue<Object> queue = new ReferenceQueue<>();
-        PhantomReference<Object> phantomRef = new PhantomReference<>(new Object(), queue);
-
-        // 测试弱引用
-        Object obj = new Object();
-        WeakReference<Object> ref = new WeakReference<>(obj);
-        System.out.println(ref.get());  // 对象
-        obj = null;
-        System.gc();
-        System.out.println(ref.get());  // 可能是null
-    }
-}
+标记-整理（Mark-Compact）：
+  ✅ 无碎片，不浪费内存
+  ❌ 移动对象开销大（要更新所有引用）
+  → 老年代用的就是标记-整理
 ```
 
-## GC算法
-
-### 标记-清除算法
+## 分代收集——为什么要把堆分成年轻代和老年代？
 
 ```
-标记前：
-┌───┬───┬───┬───┬───┬───┬───┬───┐
-│ A │ B │ C │ D │ E │ F │ G │ H │
-└───┴───┴───┴───┴───┴───┴───┴───┘
+绝大多数对象都是"朝生夕死"的：
+  - 90%+ 的对象在创建后很快就不可达
+  - 存活越久的对象，越可能继续存活
 
-标记后（A、C、E、G存活）：
-┌───┬───┬───┬───┬───┬───┬───┬───┐
-│ A │ × │ C │ × │ E │ × │ G │ × │
-└───┴───┴───┴───┴───┴───┴───┴───┘
+所以分代：
+  - 年轻代：用复制算法，GC 频率高但每次很快
+  - 老年代：用标记-整理，GC 频率低但每次可能较慢
 
-清除后：
-┌───┬───┬───┬───┬───┬───┬───┬───┐
-│ A │   │ C │   │ E │   │ G │   │
-└───┴───┴───┴───┴───┴───┴───┴───┘
-
-缺点：内存碎片
+对象生命周期：
+  new → Eden → Minor GC → Survivor → 再 Minor GC → Survivor → ...
+  → 年龄达到阈值（默认15） → 晋升到老年代
+  → 或大对象直接进老年代（-XX:PretenureSizeThreshold）
 ```
 
-### 复制算法
+## GC 收集器——怎么选？
+
+### 一张图看懂收集器演进
 
 ```
-复制前（From区）：
-┌───┬───┬───┬───┬───┬───┬───┬───┐     ┌───┬───┬───┬───┬───┬───┬───┬───┐
-│ A │ × │ C │ × │ E │ × │ G │ × │     │   │   │   │   │   │   │   │   │
-└───┴───┴───┴───┴───┴───┴───┴───┘     └───┴───┴───┴───┴───┴───┴───┴───┘
-        From区                                   To区
-
-复制后（To区）：
-┌───┬───┬───┬───┬───┬───┬───┬───┐     ┌───┬───┬───┬───┬───┬───┬───┬───┐
-│   │   │   │   │   │   │   │   │     │ A │ C │ E │ G │   │   │   │   │
-└───┴───┴───┴───┴───┴───┴───┴───┘     └───┴───┴───┴───┴───┴───┴───┴───┘
-        From区                                   To区
-
-优点：无碎片
-缺点：内存利用率低（需要保留一半空间）
+Serial（单线程）
+    → Parallel（多线程，吞吐量优先）
+    → CMS（并发标记清除，低延迟）→ 已废弃
+    → G1（分区收集，平衡吞吐和延迟）→ JDK 9+ 默认
+    → ZGC（超低延迟 < 1ms）→ JDK 15+ 正式
 ```
 
-### 标记-整理算法
+### G1 收集器——现代 Java 的默认选择
 
 ```
-标记后：
-┌───┬───┬───┬───┬───┬───┬───┬───┐
-│ A │ × │ C │ × │ E │ × │ G │ × │
-└───┴───┴───┴───┴───┴───┴───┴───┘
-
-整理后：
-┌───┬───┬───┬───┬───┬───┬───┬───┐
-│ A │ C │ E │ G │   │   │   │   │
-└───┴───┴───┴───┴───┴───┴───┴───┘
-
-优点：无碎片，内存利用率高
-缺点：移动对象成本高
-```
-
-## 分代收集
-
-```java
-// 堆内存分代结构
-┌────────────────────────────────────────────────────────┐
-│                       堆内存                           │
-├─────────────────────────────┬──────────────────────────┤
-│          年轻代             │         老年代           │
-│  ┌────────────────────────┐ │                          │
-│  │    Eden   S1    S0     │ │                          │
-│  │   (8)    (1)   (1)     │ │                          │
-│  └────────────────────────┘ │                          │
-│        (1/3 堆大小)         │     (2/3 堆大小)         │
-└─────────────────────────────┴──────────────────────────┘
-```
-
-### 对象晋升规则
-
-```java
-// 对象在Eden区创建
-// Minor GC时，存活对象复制到Survivor区
-// 年龄达到阈值（默认15），晋升到老年代
-// 大对象直接进入老年代
-
-public class ObjectAgingDemo {
-    public static void main(String[] args) {
-        // VM参数：-XX:MaxTenuringThreshold=15 -XX:+PrintTenuringDistribution
-
-        byte[] allocation1 = new byte[1024 * 1024];  // Eden
-
-        // 触发Minor GC后，对象年龄+1
-        // 年龄达到阈值后晋升老年代
-    }
-}
-```
-
-## 垃圾收集器
-
-### Serial收集器
-
-```bash
-# 单线程收集器，简单高效
-# 适合客户端模式、小内存应用
--XX:+UseSerialGC
-```
-
-### Parallel收集器
-
-```bash
-# 多线程收集器，关注吞吐量
-# JDK 8默认收集器
--XX:+UseParallelGC
--XX:ParallelGCThreads=4  # GC线程数
-```
-
-### CMS收集器
-
-```bash
-# 并发收集器，关注低延迟
-# 已废弃（JDK 14移除）
--XX:+UseConcMarkSweepGC
--XX:CMSInitiatingOccupancyFraction=75  # 老年代占用比例触发GC
-```
-
-### G1收集器
-
-```bash
-# 面向服务端的收集器，JDK 9+默认
--XX:+UseG1GC
--XX:MaxGCPauseMillis=200  # 目标停顿时间
--XX:G1HeapRegionSize=4m   # Region大小
-```
-
-```java
-// G1将堆划分为多个Region
+G1 把堆分成多个大小相等的 Region（默认约 2048 个）：
 ┌─────┬─────┬─────┬─────┬─────┬─────┬─────┬─────┐
 │  E  │  E  │  S  │  O  │  O  │  H  │  E  │  O  │
 └─────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┘
-E = Eden, S = Survivor, O = Old, H = Humongous
-
-// 特点：
-// 1. 可预测停顿时间
-// 2. 无内存碎片
-// 3. 整体标记-整理 + 局部复制算法
+E = Eden, S = Survivor, O = Old, H = Humongous（大对象）
 ```
 
-### ZGC收集器
+特点：
+1. 可预测停顿：-XX:MaxGCPauseMillis=200（默认 200ms）
+2. 无内存碎片：大部分用复制算法
+3. 优先回收垃圾最多的 Region（Garbage First）
+4. 适合大堆（6GB+），堆越大优势越明显
+
+G1 的回收过程：
+  1. 初始标记（STW）→ 标记 GC Roots 直接关联的对象
+  2. 并发标记 → 遍历对象图，和用户线程并发执行
+  3. 最终标记（STW）→ 处理并发标记期间变化的部分
+  4. 筛选回收（STW）→ 选择垃圾最多的 Region 回收
+
+什么时候触发？
+  -XX:InitiatingHeapOccupancyPercent=45
+  堆占用达到 45% 时触发并发标记
+```
+
+### ZGC——超低延迟的未来
+
+```
+目标：GC 停顿时间 < 1ms（实际通常在亚毫秒级）
+适用：大堆（16GB+）、低延迟要求高的场景（金融、交易）
+
+核心特性：
+- 并发标记、并发整理（几乎全程和用户线程并发）
+- 染色指针（Colored Pointers）：在指针中存储 GC 信息
+- 读屏障（Load Barrier）：在读取引用时检查并处理
+
+JDK 21+：分代 ZGC 成为默认，进一步降低延迟
+```
+
+::: tip 收集器选择建议
+- 小应用（< 2GB 堆）：G1 足够
+- 大应用（2-16GB 堆）：G1
+- 大堆 + 超低延迟要求（> 16GB 堆，要求 < 10ms 停顿）：ZGC
+- 不要纠结 CMS，已经废弃了
+:::
+
+## GC 日志——排查问题的第一手资料
 
 ```bash
-# 低延迟收集器（JDK 15+正式可用）
-# 目标停顿时间不超过10ms
--XX:+UseZGC
--XX:ZCollectionInterval=5  # GC间隔（秒）
+# JDK 9+ 统一日志参数
+-Xlog:gc*:file=gc.log:time,uptime,level,tags:filecount=5,filesize=20m
+
+# 关键日志格式：
+[2024-01-01T10:00:00.123+0800] GC pause (G1 Evacuation Pause) (young)
+  [Eden: 256.0M(256.0M)->0.0B(224.0M)
+   Survivors: 32.0M->32.0M
+   Heap: 384.0M(4096.0M)->160.0M(4096.0M)]
+  [Times: user=0.05 sys=0.00, real=0.01 secs]
+
+# 重点看：
+# 1. GC 原因（Allocation Failure / System.gc() / Metadata GC Threshold）
+# 2. 各区域变化（Eden、Survivor、Heap 的大小变化）
+# 3. 耗时（real = 实际停顿时间）
 ```
 
-### Shenandoah收集器
+## 面试高频题
 
-```bash
-# 低延迟收集器
-# 目标停顿时间不超过10ms
--XX:+UseShenandoahGC
-```
+**Q1：Minor GC 和 Full GC 的区别？**
 
-## GC日志分析
+Minor GC 回收年轻代（Eden + Survivor），频率高、速度快（通常 < 100ms）。Full GC 回收整个堆（包括老年代），频率低但慢（可能数秒），会触发 STW（Stop-The-World），所有用户线程暂停。线上要尽量避免频繁 Full GC。
 
-### 启用GC日志
+**Q2：什么情况下对象会直接进入老年代？**
 
-```bash
-# JDK 8
--XX:+PrintGCDetails -XX:+PrintGCDateStamps -Xloggc:gc.log
+1. 大对象（`-XX:PretenureSizeThreshold`，超过这个大小的对象直接进老年代）；2. 长期存活的对象（年龄达到 `MaxTenuringThreshold`，默认 15）；3. 动态年龄判断（Survivor 中相同年龄的对象大小总和超过 Survivor 空间的一半，大于等于该年龄的对象直接晋升）。
 
-# JDK 9+
--Xlog:gc*:file=gc.log:time,uptime,level,tags
-```
+**Q3：G1 和 CMS 的区别？**
 
-### 日志示例分析
+CMS 用标记-清除，有内存碎片，无法预测停顿时间，老年代使用。G1 用分区+复制算法，无碎片，可预测停顿时间，全堆收集。G1 是 CMS 的替代品，JDK 9 开始 CMS 被标记为废弃，JDK 14 正式移除。
 
-```
-# Minor GC
-[GC (Allocation Failure) [PSYoungGen: 8192K->1024K(9216K)] 8192K->2048K(19456K), 0.0051234 secs]
+## 延伸阅读
 
-# 解析：
-# GC原因：Allocation Failure（分配失败）
-# 年轻代：8192K -> 1024K，总大小9216K
-# 整个堆：8192K -> 2048K，总大小19456K
-# 耗时：0.0051234秒
-
-# Full GC
-[Full GC (Metadata GC Threshold) [PSYoungGen: 1024K->0K(9216K)] [ParOldGen: 1024K->1024K(10240K)] 2048K->1024K(19456K), [Metaspace: 8192K->8192K(1056768K)], 0.05 secs]
-
-# G1 GC
-[GC pause (G1 Evacuation Pause) (young), 0.0051234 secs]
-   [Eden: 4096.0M(4096.0M)->0.0B(3584.0M) Survivors: 512.0M->1024.0M Heap: 8192.0M(16384.0M)->4608.0M(16384.0M)]
-```
-
-## GC调优
-
-### 常用调优策略
-
-```bash
-# 1. 合理设置堆大小
--Xms4g -Xmx4g  # 初始和最大堆相同，避免动态扩展
-
-# 2. 选择合适的收集器
-# 吞吐量优先：Parallel GC
-# 延迟优先：G1 / ZGC
-
-# 3. 调整年轻代比例
--XX:NewRatio=2       # 老年代:年轻代 = 2:1
--XX:SurvivorRatio=8  # Eden:S0:S1 = 8:1:1
-
-# 4. 大对象直接进入老年代
--XX:PretenureSizeThreshold=1m
-
-# 5. 调整晋升年龄
--XX:MaxTenuringThreshold=15
-
-# 6. G1调优
--XX:MaxGCPauseMillis=200  # 目标停顿时间
--XX:G1HeapWastePercent=5  # 允许浪费的堆百分比
-```
-
-### 调优案例
-
-```java
-// 场景1：频繁Full GC
-// 原因：老年代空间不足
-// 解决：增大堆大小或调整年轻代比例
-
-// 场景2：Minor GC频繁
-// 原因：年轻代空间太小
-// 解决：增大年轻代大小
-
-// 场景3：GC停顿时间长
-// 原因：堆太大或使用了不合适的收集器
-// 解决：减小堆或使用低延迟收集器（G1/ZGC）
-```
-
-## 小结
-
-| 收集器 | 类型 | 适用场景 |
-|--------|------|----------|
-| Serial | 单线程 | 客户端、小内存 |
-| Parallel | 多线程 | 吞吐量优先 |
-| CMS | 并发 | 低延迟（已废弃） |
-| G1 | 分区 | 服务端、通用 |
-| ZGC | 并发 | 超低延迟 |
+- 上一篇：[JVM 原理](jvm.md) — 运行时数据区、类加载、JIT
+- 下一篇：[性能调优](tuning.md) — JVM 参数、诊断工具、常见问题
+- [并发编程](../java-basic/concurrency.md) — 线程安全、锁机制

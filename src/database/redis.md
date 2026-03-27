@@ -11,331 +11,166 @@ tag:
 
 # Redis
 
-Redis是高性能的内存键值数据库，支持多种数据结构。
+> Redis 是 Java 后端开发中用得最多的中间件，没有之一。但多数人对 Redis 的理解停留在 `SET` / `GET` / `DEL`。Redis 为什么这么快？持久化会不会丢数据？集群怎么工作？分布式锁怎么实现？这些问题在实际开发中天天遇到。
 
-## 数据类型
+## 基础入门：Redis 5 分钟上手
 
-### String
+### 为什么用 Redis？
+
+```
+MySQL 查询：磁盘 IO，毫秒级
+Redis 查询：内存操作，微秒级（快 100-1000 倍）
+
+适用场景：
+- 热点数据缓存
+- 排行榜（ZSet）
+- 计数器（INCR）
+- 分布式锁（SETNX）
+- 消息队列（List / Stream）
+```
+
+### 基本操作
 
 ```bash
-# 设置值
-SET key value
-SET key value EX 3600  # 设置过期时间（秒）
-SET key value PX 3600000  # 毫秒
-SETNX key value  # 不存在时设置
+# 启动 Redis
+redis-server
 
-# 获取值
-GET key
+# 连接
+redis-cli
 
-# 自增
-INCR counter
-INCRBY counter 10
-DECR counter
-
-# 追加
-APPEND key value
-
-# 获取子串
-GETRANGE key 0 10
+# 基本命令
+SET key value           # 设置值
+GET key                 # 获取值
+DEL key                 # 删除
+EXPIRE key 3600         # 设置过期时间（秒）
+TTL key                 # 查看剩余过期时间
+INCR counter            # 计数器 +1
 ```
 
-### Hash
+---
 
-```bash
-# 设置字段
-HSET user:1 name "张三"
-HSET user:1 age 25
-HMSET user:1 name "张三" age 25
 
-# 获取字段
-HGET user:1 name
-HMGET user:1 name age
-HGETALL user:1
+## 为什么 Redis 这么快？
 
-# 删除字段
-HDEL user:1 age
+```
+1. 内存操作：数据存在内存中，读写延迟 ~100ns（磁盘 ~10ms）
+2. 单线程模型：没有线程切换和锁竞争的开销
+3. IO 多路复用：一个线程处理大量连接
+4. 高效的数据结构：每种数据结构都针对特定场景优化
 
-# 自增
-HINCRBY user:1 age 1
-
-# 判断字段存在
-HEXISTS user:1 name
+注意：Redis 6.0 引入了多线程 IO（网络读写多线程），命令执行仍然是单线程
 ```
 
-### List
+## 五种核心数据结构
 
-```bash
-# 左推入/右推入
-LPUSH list a b c
-RPUSH list x y z
+```
+String：最常用，缓存、计数器、分布式锁
+  SET key value
+  INCR counter
+  SET key value EX 3600    # 带 TTL
+  SETNX key value           # 分布式锁（SET key value NX EX 30）
 
-# 左弹出/右弹出
-LPOP list
-RPOP list
+Hash：对象属性缓存（如用户信息）
+  HSET user:1 name "张三" age 25
+  HGET user:1 name
+  HGETALL user:1
 
-# 获取范围
-LRANGE list 0 -1  # 获取所有
+List：消息队列、最新列表
+  LPUSH queue task1
+  RPOP queue               # 阻塞获取：BRPOP queue 30
 
-# 阻塞弹出
-BLPOP list 5  # 5秒超时
+Set：去重、标签、交集运算
+  SADD tags:1 java spring redis
+  SISMEMBER tags:1 java
+  SINTER tags:1 tags:2      # 共同标签
 
-# 获取长度
-LLEN list
+ZSet（有序集合）：排行榜、延时队列
+  ZADD leaderboard 100 "user1"
+  ZADD leaderboard 200 "user2"
+  ZREVRANGE leaderboard 0 9 WITHSCORES  # Top 10
 ```
 
-### Set
+## 缓存实战
 
-```bash
-# 添加成员
-SADD set1 a b c
+### 缓存与数据库一致性
 
-# 获取所有成员
-SMEMBERS set1
+```
+常用方案：Cache Aside（旁路缓存）
 
-# 判断成员存在
-SISMEMBER set1 a
+读：
+  1. 先查缓存
+  2. 命中 → 返回
+  3. 未命中 → 查数据库 → 写入缓存 → 返回
 
-# 集合运算
-SUNION set1 set2   # 并集
-SINTER set1 set2   # 交集
-SDIFF set1 set2    # 差集
+写：
+  1. 先更新数据库
+  2. 再删除缓存（不是更新缓存！）
 
-# 移除成员
-SREM set1 a
+为什么删除而不是更新？
+  - 如果更新缓存，但数据库更新失败了 → 数据不一致
+  - 如果删除缓存，下次读取时自然回填 → 最终一致
+  - 频繁更新的数据，更新缓存大部分是浪费（写多读少时）
+
+极端情况：数据库更新成功，删除缓存失败
+  → 用消息队列重试删除（可靠性更高）
+  → 或用 Canal 监听 binlog 异步删除
 ```
 
-### Sorted Set
-
-```bash
-# 添加成员（带分数）
-ZADD scores 100 "张三" 95 "李四" 88 "王五"
-
-# 获取排名范围
-ZRANGE scores 0 -1 WITHSCORES  # 升序
-ZREVRANGE scores 0 -1 WITHSCORES  # 降序
-
-# 获取成员分数
-ZSCORE scores "张三"
-
-# 获取成员排名
-ZRANK scores "张三"  # 升序排名
-ZREVRANK scores "张三"  # 降序排名
-
-# 分数范围查询
-ZRANGEBYSCORE scores 90 100 WITHSCORES
-
-# 增加分数
-ZINCRBY scores 5 "张三"
-```
-
-## 持久化
-
-### RDB
-
-```ini
-# redis.conf
-save 900 1      # 900秒内至少1次修改
-save 300 10     # 300秒内至少10次修改
-save 60 10000   # 60秒内至少10000次修改
-
-dbfilename dump.rdb
-dir ./
-```
-
-### AOF
-
-```ini
-# redis.conf
-appendonly yes
-appendfilename "appendonly.aof"
-
-# 同步策略
-appendfsync always     # 每次写入都同步
-appendfsync everysec   # 每秒同步（推荐）
-appendfsync no         # 由操作系统决定
-```
-
-## 缓存策略
-
-### 缓存穿透
+### 分布式锁
 
 ```java
-// 问题：查询不存在的数据，绕过缓存直接访问数据库
-// 解决：缓存空值或布隆过滤器
-
-// 方案1：缓存空值
-public User getUser(Long id) {
-    String key = "user:" + id;
-    String value = redis.get(key);
-
-    if (value != null) {
-        if ("null".equals(value)) {
-            return null;  // 防止穿透
-        }
-        return JSON.parseObject(value, User.class);
+// Redis 分布式锁（Redisson 实现）
+RLock lock = redisson.getLock("order:lock:" + orderId);
+try {
+    if (lock.tryLock(5, 30, TimeUnit.SECONDS)) {  // 等待5秒，锁30秒
+        // 执行业务
     }
-
-    User user = userDao.findById(id);
-    if (user == null) {
-        redis.setex(key, 300, "null");  // 缓存空值5分钟
-    } else {
-        redis.setex(key, 3600, JSON.toJSONString(user));
-    }
-    return user;
+} finally {
+    lock.unlock();
 }
 
-// 方案2：布隆过滤器
-public User getUserWithBloom(Long id) {
-    if (!bloomFilter.mightContain(id)) {
-        return null;  // 一定不存在
-    }
-    // 查询缓存和数据库...
-}
+// 为什么不用 SETNX + EXPIRE？
+// SETNX 和 EXPIRE 不是原子操作
+// 如果 SETNX 成功但 EXPIRE 失败（进程崩溃），锁永远不会释放
+// 解决：SET key value NX EX 30（原子操作）+ Redisson 的看门狗续期
+
+// Redisson 的看门狗（Watchdog）：
+// 如果锁设置了 30 秒过期，但业务没执行完
+// 看门狗每 10 秒自动续期到 30 秒
+// 持有锁的进程崩溃 → 看门狗停止续期 → 锁自动过期释放
 ```
 
-### 缓存击穿
+## 持久化——会不会丢数据？
 
-```java
-// 问题：热点key过期，大量请求同时访问数据库
-// 解决：互斥锁或永不过期
+```
+RDB（快照）：
+  - 定时把内存数据 dump 到磁盘
+  - 恢复快，但可能丢失最后一次快照后的数据
+  - 适合做备份
 
-// 方案1：互斥锁
-public User getUser(Long id) {
-    String key = "user:" + id;
-    String lockKey = "lock:user:" + id;
+AOF（追加日志）：
+  - 每条写命令追加到日志文件
+  - 丢失数据少（最多丢 1 秒）
+  - 文件体积大，恢复慢
 
-    String value = redis.get(key);
-    if (value != null) {
-        return JSON.parseObject(value, User.class);
-    }
-
-    // 获取分布式锁
-    if (redis.setnx(lockKey, "1", 10)) {
-        try {
-            // 双重检查
-            value = redis.get(key);
-            if (value != null) {
-                return JSON.parseObject(value, User.class);
-            }
-
-            User user = userDao.findById(id);
-            redis.setex(key, 3600, JSON.toJSONString(user));
-            return user;
-        } finally {
-            redis.del(lockKey);
-        }
-    } else {
-        // 等待并重试
-        Thread.sleep(50);
-        return getUser(id);
-    }
-}
-
-// 方案2：逻辑过期
-public User getUser(Long id) {
-    String key = "user:" + id;
-    String value = redis.get(key);
-
-    if (value != null) {
-        RedisData redisData = JSON.parseObject(value, RedisData.class);
-        if (redisData.getExpireTime().isAfter(LocalDateTime.now())) {
-            return redisData.getData();
-        }
-        // 过期，异步刷新
-        asyncRefresh(id);
-        return redisData.getData();  // 返回旧数据
-    }
-
-    // 缓存不存在，加锁重建
-    // ...
-}
+Redis 4.0+ 混合持久化：
+  - RDB + AOF 结合
+  - RDB 做基础快照，增量用 AOF 记录
+  - 既有 RDB 的快速恢复，又有 AOF 的少量丢失
 ```
 
-### 缓存雪崩
+## 面试高频题
 
-```java
-// 问题：大量缓存同时过期
-// 解决：随机过期时间 + 多级缓存
+**Q1：Redis 和 Memcached 的区别？**
 
-// 方案1：随机过期时间
-int randomExpire = 3600 + new Random().nextInt(600);  // 1小时 ± 10分钟
-redis.setex(key, randomExpire, value);
+Redis 支持丰富数据结构（String/Hash/List/Set/ZSet），支持持久化（RDB/AOF），支持主从复制和集群，单线程（6.0 多线程 IO）。Memcached 只支持 String，不支持持久化，不支持集群，多线程模型。实际开发中几乎都用 Redis。
 
-// 方案2：多级缓存
-// L1: 本地缓存 (Caffeine)
-// L2: Redis
-// L3: 数据库
-```
+**Q2：Redis 集群方案有哪些？**
 
-## 分布式锁
+主从复制（读写分离）、哨兵模式（Sentinel，自动故障转移）、Cluster 模式（官方集群方案，数据分片，水平扩展）。小规模用主从+哨兵，大规模用 Cluster。
 
-### Redisson
+## 延伸阅读
 
-```java
-// 添加依赖
-<dependency>
-    <groupId>org.redisson</groupId>
-    <artifactId>redisson-spring-boot-starter</artifactId>
-</dependency>
-
-// 使用
-@Autowired
-private RedissonClient redisson;
-
-public void doSomething() {
-    RLock lock = redisson.getLock("my-lock");
-    try {
-        // 尝试获取锁，最多等待10秒，锁自动释放时间30秒
-        if (lock.tryLock(10, 30, TimeUnit.SECONDS)) {
-            // 执行业务逻辑
-        }
-    } finally {
-        if (lock.isHeldByCurrentThread()) {
-            lock.unlock();
-        }
-    }
-}
-
-// 看门狗机制（自动续期）
-RLock lock = redisson.getLock("my-lock");
-lock.lock();  // 默认30秒，看门狗每10秒续期
-```
-
-## 消息队列
-
-### 发布订阅
-
-```bash
-# 发布消息
-PUBLISH channel1 "Hello"
-
-# 订阅
-SUBSCRIBE channel1
-
-# 模式订阅
-PSUBSCRIBE channel*
-```
-
-### Stream
-
-```bash
-# 添加消息
-XADD stream1 * name "张三" age 25
-
-# 读取消息
-XREAD COUNT 10 STREAMS stream1 0
-
-# 消费者组
-XGROUP CREATE stream1 group1 0
-XREADGROUP GROUP group1 consumer1 COUNT 1 STREAMS stream1 >
-```
-
-## 小结
-
-| 特性 | 说明 |
-|------|------|
-| 数据类型 | String/Hash/List/Set/ZSet |
-| 持久化 | RDB快照 / AOF日志 |
-| 缓存策略 | 穿透/击穿/雪崩 |
-| 分布式锁 | Redisson实现 |
-| 消息 | Pub/Sub / Stream |
+- 上一篇：[MySQL](mysql.md) — 索引、事务、MVCC
+- 下一篇：[Elasticsearch](es.md) — 全文搜索、日志分析
+- [高并发架构](../architecture/high-concurrency.md) — 缓存策略、限流降级

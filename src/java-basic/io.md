@@ -12,476 +12,373 @@ tag:
 
 # Java IO/NIO
 
-Java提供了丰富的IO操作API，包括传统的BIO（Blocking IO）和NIO（Non-blocking IO）。
+> Java 的 IO 体系是出了名的复杂——InputStream、OutputStream、Reader、Writer、Buffered、Channel、Buffer、Selector……光是类名就能列出一页纸。但拨开表面的复杂度，核心只有两件事：**数据从哪来、数据到哪去**。这篇文章帮你理清整个 IO 体系的脉络。
 
-## IO流体系
+## IO 流体系全景
 
+```mermaid
+graph TD
+    subgraph "按数据形式"
+        A["字节流<br/>处理二进制：图片、视频、压缩包"]
+        B["字符流<br/>处理文本：自动处理字符编码"]
+    end
+    subgraph "按 IO 模型"
+        C["BIO（Blocking IO）<br/>一个连接一个线程"]
+        D["NIO（Non-blocking IO）<br/>多路复用，一个线程处理多个连接"]
+    end
 ```
-字节流                    字符流
-├── InputStream          ├── Reader
-│   ├── FileInputStream  │   ├── FileReader
-│   ├── BufferedInputStream  │   ├── BufferedReader
-│   └── ObjectInputStream    │   └── InputStreamReader
-└── OutputStream         └── Writer
-    ├── FileOutputStream      ├── FileWriter
-    ├── BufferedOutputStream  ├── BufferedWriter
-    └── ObjectOutputStream    └── OutputStreamWriter
+
+```mermaid
+graph TD
+    subgraph "字节流"
+        IN["InputStream（读）"]
+        OUT["OutputStream（写）"]
+        IN --> FIS["FileInputStream"]
+        IN --> BIS["BufferedInputStream"]
+        IN --> OIS["ObjectInputStream"]
+        OUT --> FOS["FileOutputStream"]
+        OUT --> BOS["BufferedOutputStream"]
+        OUT --> OOS["ObjectOutputStream"]
+    end
+    subgraph "字符流"
+        R["Reader（读）"]
+        W["Writer（写）"]
+        R --> FR["FileReader"]
+        R --> BR["BufferedReader ← 最常用"]
+        R --> ISR["InputStreamReader<br/>编码转换桥梁"]
+        W --> FW["FileWriter"]
+        W --> BW["BufferedWriter"]
+        W --> OSW["OutputStreamWriter<br/>编码转换桥梁"]
+    end
 ```
 
-## 字节流
+## BIO——Blocking IO
 
-### FileInputStream / FileOutputStream
+### 为什么 BIO 在高并发下不行？
 
 ```java
-import java.io.*;
+// BIO 的核心问题：每个连接独占一个线程
+// 线程大部分时间在等 IO（阻塞），CPU 利用率极低
 
-public class FileStreamDemo {
-    public static void main(String[] args) {
-        // 写入文件
-        try (FileOutputStream fos = new FileOutputStream("test.txt")) {
-            String content = "Hello, Java IO!";
-            fos.write(content.getBytes());
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+// 10000 个并发连接 → 10000 个线程
+// 每个线程栈 1MB → 10GB 内存！
+// 而且线程上下文切换的开销巨大
 
-        // 读取文件（单字节）
-        try (FileInputStream fis = new FileInputStream("test.txt")) {
-            int data;
-            while ((data = fis.read()) != -1) {
-                System.out.print((char) data);
-            }
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-
-        // 读取文件（缓冲区）
-        try (FileInputStream fis = new FileInputStream("test.txt")) {
-            byte[] buffer = new byte[1024];
-            int len;
-            while ((len = fis.read(buffer)) != -1) {
-                System.out.println(new String(buffer, 0, len));
-            }
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-    }
+ServerSocket server = new ServerSocket(8080);
+while (true) {
+    Socket socket = server.accept();  // 阻塞，等待连接
+    new Thread(() -> {               // 每个连接一个线程！
+        InputStream in = socket.getInputStream();
+        in.read();  // 阻塞，等待数据
+        // 处理...
+    }).start();
 }
 ```
 
-### BufferedInputStream / BufferedOutputStream
+### try-with-resources——不要忘了关流
 
 ```java
-import java.io.*;
-
-public class BufferedStreamDemo {
-    public static void main(String[] args) {
-        // 复制文件
-        try (
-            BufferedInputStream bis = new BufferedInputStream(
-                new FileInputStream("source.txt")
-            );
-            BufferedOutputStream bos = new BufferedOutputStream(
-                new FileOutputStream("dest.txt")
-            )
-        ) {
-            byte[] buffer = new byte[8192];
-            int len;
-            while ((len = bis.read(buffer)) != -1) {
-                bos.write(buffer, 0, len);
-            }
-            bos.flush();
-            System.out.println("复制完成");
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+// ❌ 传统写法：finally 里关闭，代码冗长
+InputStream in = null;
+try {
+    in = new FileInputStream("test.txt");
+    // 读取...
+} finally {
+    if (in != null) {
+        try { in.close(); } catch (IOException e) { /* ... */ }
     }
 }
+
+// ✅ try-with-resources（Java 7+）：自动关闭，代码简洁
+try (InputStream in = new FileInputStream("test.txt");
+     BufferedReader reader = new BufferedReader(new InputStreamReader(in))) {
+    String line;
+    while ((line = reader.readLine()) != null) {
+        System.out.println(line);
+    }
+}  // 自动调用 in.close()，即使发生异常也会关闭
 ```
 
-## 字符流
-
-### FileReader / FileWriter
-
-```java
-import java.io.*;
-
-public class FileReaderDemo {
-    public static void main(String[] args) {
-        // 写入文件
-        try (FileWriter fw = new FileWriter("test.txt")) {
-            fw.write("你好，Java字符流！\n");
-            fw.write("第二行内容");
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-
-        // 读取文件
-        try (FileReader fr = new FileReader("test.txt")) {
-            char[] buffer = new char[1024];
-            int len;
-            while ((len = fr.read(buffer)) != -1) {
-                System.out.print(new String(buffer, 0, len));
-            }
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-    }
-}
-```
-
-### BufferedReader / BufferedWriter
-
-```java
-import java.io.*;
-
-public class BufferedReaderDemo {
-    public static void main(String[] args) {
-        // 写入文件
-        try (BufferedWriter bw = new BufferedWriter(
-            new FileWriter("test.txt")
-        )) {
-            bw.write("第一行");
-            bw.newLine();  // 换行
-            bw.write("第二行");
-            bw.newLine();
-            bw.write("第三行");
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-
-        // 读取文件（按行）
-        try (BufferedReader br = new BufferedReader(
-            new FileReader("test.txt")
-        )) {
-            String line;
-            while ((line = br.readLine()) != null) {
-                System.out.println(line);
-            }
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-    }
-}
-```
-
-### InputStreamReader / OutputStreamWriter
-
-```java
-import java.io.*;
-
-public class ConvertStreamDemo {
-    public static void main(String[] args) {
-        // 指定编码读取
-        try (
-            InputStreamReader isr = new InputStreamReader(
-                new FileInputStream("test.txt"), "UTF-8"
-            );
-            BufferedReader br = new BufferedReader(isr)
-        ) {
-            String line;
-            while ((line = br.readLine()) != null) {
-                System.out.println(line);
-            }
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-
-        // 指定编码写入
-        try (
-            OutputStreamWriter osw = new OutputStreamWriter(
-                new FileOutputStream("output.txt"), "UTF-8"
-            );
-            BufferedWriter bw = new BufferedWriter(osw)
-        ) {
-            bw.write("中文内容");
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-    }
-}
-```
-
-## 对象序列化
-
-### Serializable接口
-
-```java
-import java.io.*;
-
-// 实现Serializable接口
-class Person implements Serializable {
-    private static final long serialVersionUID = 1L;
-
-    private String name;
-    private int age;
-    private transient String password;  // 不参与序列化
-
-    public Person(String name, int age, String password) {
-        this.name = name;
-        this.age = age;
-        this.password = password;
-    }
-
-    @Override
-    public String toString() {
-        return "Person{name='" + name + "', age=" + age +
-               ", password='" + password + "'}";
-    }
-}
-
-public class SerializationDemo {
-    public static void main(String[] args) {
-        Person person = new Person("张三", 25, "123456");
-
-        // 序列化
-        try (ObjectOutputStream oos = new ObjectOutputStream(
-            new FileOutputStream("person.dat")
-        )) {
-            oos.writeObject(person);
-            System.out.println("序列化完成");
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-
-        // 反序列化
-        try (ObjectInputStream ois = new ObjectInputStream(
-            new FileInputStream("person.dat")
-        )) {
-            Person p = (Person) ois.readObject();
-            System.out.println("反序列化: " + p);
-            // Person{name='张三', age=25, password='null'}
-        } catch (IOException | ClassNotFoundException e) {
-            e.printStackTrace();
-        }
-    }
-}
-```
-
-## File类
-
-```java
-import java.io.File;
-import java.io.IOException;
-import java.util.Date;
-
-public class FileDemo {
-    public static void main(String[] args) throws IOException {
-        File file = new File("test.txt");
-        File dir = new File("mydir/subdir");
-
-        // 创建目录
-        boolean created = dir.mkdirs();
-        System.out.println("目录创建: " + created);
-
-        // 创建文件
-        File newFile = new File(dir, "newfile.txt");
-        if (!newFile.exists()) {
-            newFile.createNewFile();
-        }
-
-        // 文件信息
-        System.out.println("文件名: " + file.getName());
-        System.out.println("路径: " + file.getPath());
-        System.out.println("绝对路径: " + file.getAbsolutePath());
-        System.out.println("父目录: " + file.getParent());
-        System.out.println("是否存在: " + file.exists());
-        System.out.println("是否文件: " + file.isFile());
-        System.out.println("是否目录: " + file.isDirectory());
-        System.out.println("文件大小: " + file.length() + " bytes");
-        System.out.println("最后修改: " + new Date(file.lastModified()));
-
-        // 文件操作
-        // file.delete();       // 删除
-        // file.renameTo(new File("newname.txt"));  // 重命名
-
-        // 遍历目录
-        File[] files = dir.listFiles();
-        if (files != null) {
-            for (File f : files) {
-                System.out.println(f.getName() + (f.isDirectory() ? "/" : ""));
-            }
-        }
-
-        // 文件过滤器
-        File[] txtFiles = dir.listFiles((d, name) -> name.endsWith(".txt"));
-    }
-}
-```
-
-## NIO
-
-### Channel和Buffer
-
-```java
-import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
-import java.nio.file.*;
-
-public class NIODemo {
-    public static void main(String[] args) {
-        // 使用NIO复制文件
-        try (
-            FileChannel sourceChannel = FileChannel.open(
-                Paths.get("source.txt"),
-                StandardOpenOption.READ
-            );
-            FileChannel destChannel = FileChannel.open(
-                Paths.get("dest.txt"),
-                StandardOpenOption.CREATE,
-                StandardOpenOption.WRITE
-            )
-        ) {
-            // 方式1：使用transferTo
-            sourceChannel.transferTo(0, sourceChannel.size(), destChannel);
-
-            // 方式2：使用Buffer
-            // ByteBuffer buffer = ByteBuffer.allocate(1024);
-            // while (sourceChannel.read(buffer) != -1) {
-            //     buffer.flip();  // 切换为读模式
-            //     destChannel.write(buffer);
-            //     buffer.clear();  // 清空缓冲区
-            // }
-
-            System.out.println("复制完成");
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-    }
-}
-```
-
-### Buffer操作
-
-```java
-import java.nio.ByteBuffer;
-import java.nio.CharBuffer;
-
-public class BufferDemo {
-    public static void main(String[] args) {
-        // 创建Buffer
-        ByteBuffer buffer = ByteBuffer.allocate(1024);
-
-        // 写入数据
-        buffer.put("Hello".getBytes());
-
-        // 切换为读模式
-        buffer.flip();
-
-        // 读取数据
-        while (buffer.hasRemaining()) {
-            System.out.print((char) buffer.get());
-        }
-        System.out.println();
-
-        // 重置buffer
-        buffer.clear();  // 清空，准备再次写入
-        // buffer.rewind();  // 重置position，可重新读取
-
-        // 直接Buffer（堆外内存）
-        ByteBuffer directBuffer = ByteBuffer.allocateDirect(1024);
-
-        // Buffer属性
-        System.out.println("容量: " + buffer.capacity());
-        System.out.println("限制: " + buffer.limit());
-        System.out.println("位置: " + buffer.position());
-    }
-}
-```
-
-## NIO.2 (Files和Path)
-
-```java
-import java.nio.file.*;
-import java.nio.file.attribute.*;
-import java.io.IOException;
-import java.util.stream.Stream;
-
-public class FilesDemo {
-    public static void main(String[] args) throws IOException {
-        Path path = Paths.get("test.txt");
-        Path dir = Paths.get("mydir");
-
-        // 创建文件和目录
-        if (!Files.exists(dir)) {
-            Files.createDirectories(dir);
-        }
-        if (!Files.exists(path)) {
-            Files.createFile(path);
-        }
-
-        // 写入文件
-        Files.write(path, "Hello, NIO.2!".getBytes());
-        Files.write(path, "\n第二行".getBytes(), StandardOpenOption.APPEND);
-
-        // 读取文件
-        String content = Files.readString(path);
-        System.out.println("全部内容:\n" + content);
-
-        // 读取所有行
-        Files.readAllLines(path).forEach(System.out::println);
-
-        // 文件信息
-        System.out.println("大小: " + Files.size(path));
-        System.out.println("是否隐藏: " + Files.isHidden(path));
-        System.out.println("是否可读: " + Files.isReadable(path));
-        System.out.println("是否可写: " + Files.isWritable(path));
-
-        // 文件属性
-        BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class);
-        System.out.println("创建时间: " + attrs.creationTime());
-        System.out.println("修改时间: " + attrs.lastModifiedTime());
-        System.out.println("是否目录: " + attrs.isDirectory());
-
-        // 复制、移动、删除
-        // Files.copy(path, Paths.get("copy.txt"), StandardCopyOption.REPLACE_EXISTING);
-        // Files.move(path, Paths.get("moved.txt"), StandardCopyOption.REPLACE_EXISTING);
-        // Files.deleteIfExists(path);
-
-        // 遍历目录
-        try (Stream<Path> stream = Files.list(dir)) {
-            stream.forEach(p -> System.out.println(p.getFileName()));
-        }
-
-        // 深度遍历（递归）
-        try (Stream<Path> stream = Files.walk(dir)) {
-            stream.filter(Files::isRegularFile)
-                  .forEach(p -> System.out.println(p));
-        }
-
-        // 查找文件
-        try (Stream<Path> stream = Files.find(dir, 10,
-            (p, attr) -> attr.isRegularFile() && p.toString().endsWith(".txt")
-        )) {
-            stream.forEach(System.out::println);
-        }
-
-        // 读取大文件（流式）
-        try (Stream<String> lines = Files.lines(path)) {
-            lines.filter(line -> line.contains("Hello"))
-                 .forEach(System.out::println);
-        }
-    }
-}
-```
-
-## IO流选择指南
-
-| 场景 | 推荐方案 |
-|------|----------|
-| 文本文件读写 | BufferedReader / BufferedWriter |
-| 二进制文件读写 | BufferedInputStream / BufferedOutputStream |
-| 对象持久化 | ObjectOutputStream / ObjectInputStream |
-| 大文件复制 | NIO FileChannel |
-| 文件属性操作 | NIO.2 Files |
-| 文件遍历搜索 | NIO.2 Files.walk() |
-
-::: tip 资源管理
-Java 7+ 推荐使用 try-with-resources 语句自动关闭资源，避免资源泄漏。
+::: danger 资源泄漏的后果
+忘记关闭流会导致文件句柄泄漏。Linux 默认每个进程最多打开 1024 个文件（`ulimit -n`）。在高并发服务中，流不关闭会迅速耗尽文件句柄，导致无法打开新文件、无法建立新连接。**用 try-with-resources，养成习惯。**
 :::
 
-## 小结
+### Buffered 流——不要一行一行读文件
 
-- **BIO**：传统IO，面向流，阻塞式
-- **NIO**：新IO，面向缓冲区，非阻塞式
-- **NIO.2**：增强的文件操作API，更简洁易用
+```java
+// ❌ 无缓冲：每次 read() 都是一次系统调用
+try (FileInputStream fis = new FileInputStream("big.txt")) {
+    int data;
+    while ((data = fis.read()) != -1) {  // 每次读 1 字节！
+        // 处理...
+    }
+}
+
+// ✅ 有缓冲：减少系统调用次数
+try (BufferedInputStream bis = new BufferedInputStream(
+        new FileInputStream("big.txt"))) {
+    byte[] buffer = new byte[8192];  // 8KB 缓冲区
+    int len;
+    while ((len = bis.read(buffer)) != -1) {
+        // 处理 buffer[0..len-1]
+    }
+}
+
+// ✅ 读文本文件的最佳方式
+try (BufferedReader reader = new BufferedReader(
+        new FileReader("big.txt"))) {
+    String line;
+    while ((line = reader.readLine()) != null) {
+        // 按行处理
+    }
+}
+```
+
+### 字节流 vs 字符流——什么时候用哪个？
+
+```
+用字节流：二进制文件（图片、视频、音频、压缩包、序列化对象）
+用字符流：文本文件（txt、csv、json、xml、properties）
+
+规则很简单：如果你需要关心字符编码，用字符流。
+如果你不需要关心字符编码（或想自己控制），用字节流。
+```
+
+### 字符编码——乱码的根源
+
+```java
+// 编码问题是最常见的 IO bug 之一
+
+// ❌ 用 FileReader 读 UTF-8 文件——在 GBK 环境下会乱码
+// FileReader 使用平台默认编码（Windows 是 GBK，Linux 是 UTF-8）
+try (FileReader reader = new FileReader("utf8.txt")) {
+    // 可能乱码！
+}
+
+// ✅ 明确指定编码
+try (BufferedReader reader = new BufferedReader(
+        new InputStreamReader(new FileInputStream("utf8.txt"), StandardCharsets.UTF_8))) {
+    // 编码安全
+}
+
+// ❌ String.getBytes() 用平台默认编码
+byte[] bytes = "中文".getBytes();  // 不安全！
+
+// ✅ 明确指定编码
+byte[] bytes = "中文".getBytes(StandardCharsets.UTF_8);
+String decoded = new String(bytes, StandardCharsets.UTF_8);
+```
+
+::: warning 永远不要依赖平台默认编码
+`FileReader`、`FileWriter`、`String.getBytes()` 不带参数时使用平台默认编码，在不同环境下行为不同。**永远显式指定 `StandardCharsets.UTF_8`**。
+:::
+
+### 序列化—— Serializable 的高危陷阱
+
+```java
+// 实现 Serializable 很简单，但坑很多
+
+// 1. serialVersionUID 不写会怎样？
+// 每次修改类（加字段、改方法），编译器会自动生成新的 serialVersionUID
+// 旧版本序列化的数据在新版本反序列化时会报 InvalidClassException
+
+public class User implements Serializable {
+    private static final long serialVersionUID = 1L;  // 必须写！
+    private String name;
+    private transient String password;  // transient：不参与序列化
+}
+
+// 2. transient 的字段反序列化后是 null/0/false
+// 如果需要自定义序列化逻辑，实现 writeObject/readObject
+private void writeObject(ObjectOutputStream out) throws IOException {
+    out.defaultWriteObject();  // 默认序列化
+    // 自定义：比如对 password 加密后再序列化
+    out.writeObject(encrypt(password));
+}
+
+private void readObject(ObjectInputStream in) throws IOException, ClassNotFoundException {
+    in.defaultReadObject();  // 默认反序列化
+    // 自定义解密
+    this.password = decrypt((String) in.readObject());
+}
+```
+
+## NIO——Non-blocking IO
+
+### Buffer——NIO 的核心概念
+
+BIO 是面向流的（stream），NIO 是面向缓冲区的（buffer）。区别在于：
+
+```
+BIO（流）：
+  线程 → 直接从流读/向流写 → 阻塞等待
+
+NIO（缓冲区）：
+  线程 → 先把数据读进 Buffer → 再从 Buffer 取数据
+  线程 → 先把数据写入 Buffer → Buffer 再写入通道
+```
+
+```java
+ByteBuffer buffer = ByteBuffer.allocate(1024);
+
+// 写入数据
+buffer.put("Hello".getBytes());
+System.out.println("写入后: position=" + buffer.position()  // 5
+    + ", limit=" + buffer.limit());                        // 1024
+
+// 切换为读模式
+buffer.flip();
+System.out.println("flip后: position=" + buffer.position()  // 0
+    + ", limit=" + buffer.limit());                        // 5
+
+// 读取数据
+while (buffer.hasRemaining()) {
+    System.out.print((char) buffer.get());
+}
+
+// 重置
+buffer.clear();  // position=0, limit=capacity，准备再次写入
+// buffer.rewind();  // position=0，limit 不变，可以重新读取
+// buffer.compact();  // 把未读完的数据移到头部，准备继续写入
+```
+
+```
+Buffer 的核心属性：
+- capacity（容量）：固定不变，分配时确定
+- position（位置）：当前读写位置
+- limit（限制）：可读写的边界
+- 写模式：position 从 0 递增，limit = capacity
+- flip()：切换为读模式
+- 读模式：position 从 0 递增，limit = 写入的数据量
+```
+
+::: tip 直接缓冲区 vs 堆缓冲区
+`ByteBuffer.allocateDirect(1024)` 创建堆外内存（直接缓冲区），减少一次 JVM 堆到 Native 内存的拷贝，适合大文件 IO 和网络 IO。代价是分配/回收成本高，不受 GC 管理。`ByteBuffer.allocate(1024)` 创建堆内缓冲区，由 GC 管理，适合小数据量。
+:::
+
+### Channel——双向数据通道
+
+```java
+// BIO 的流是单向的（InputStream 只能读，OutputStream 只能写）
+// NIO 的 Channel 是双向的（既可以读也可以写）
+
+// 文件复制——NIO 方式
+try (FileChannel src = FileChannel.open(Paths.get("source.txt"), StandardOpenOption.READ);
+     FileChannel dest = FileChannel.open(Paths.get("dest.txt"),
+         StandardOpenOption.CREATE, StandardOpenOption.WRITE)) {
+
+    // 方式1：transferTo——零拷贝（最佳性能）
+    // 底层利用操作系统的 sendfile 系统调用
+    // 数据直接从文件系统缓冲区到目标 Channel，不经过用户空间
+    src.transferTo(0, src.size(), dest);
+
+    // 方式2：手动用 Buffer
+    // ByteBuffer buffer = ByteBuffer.allocate(8192);
+    // while (src.read(buffer) != -1) {
+    //     buffer.flip();
+    //     dest.write(buffer);
+    //     buffer.clear();
+    // }
+}
+```
+
+### Selector——多路复用
+
+Selector 是 NIO 解决 BIO "一个连接一个线程"问题的方案：
+
+```java
+// NIO 多路复用：一个线程处理多个连接
+Selector selector = Selector.open();
+ServerSocketChannel serverChannel = ServerSocketChannel.open();
+serverChannel.configureBlocking(false);  // 非阻塞模式
+serverChannel.register(selector, SelectionKey.OP_ACCEPT);  // 注册关注的事件
+
+while (true) {
+    selector.select();  // 阻塞，直到有事件就绪（有连接、有数据可读等）
+
+    Set<SelectionKey> readyKeys = selector.selectedKeys();
+    for (SelectionKey key : readyKeys) {
+        if (key.isAcceptable()) {
+            // 新连接到来
+            SocketChannel channel = serverChannel.accept();
+            channel.configureBlocking(false);
+            channel.register(selector, SelectionKey.OP_READ);  // 关注读事件
+        }
+        if (key.isReadable()) {
+            // 数据可读
+            SocketChannel channel = (SocketChannel) key.channel();
+            ByteBuffer buffer = ByteBuffer.allocate(1024);
+            int len = channel.read(buffer);
+            // 处理数据...
+        }
+    }
+    readyKeys.clear();
+}
+```
+
+::: tip NIO vs BIO 的本质区别
+BIO 是阻塞的：读不到数据就等，线程不能干别的。NIO 是非阻塞的 + 多路复用：一个线程通过 Selector 监听多个 Channel 的事件，哪个 Channel 有数据了就处理哪个。Netty、Tomcat NIO 模式都是基于这个原理。
+:::
+
+## NIO.2——现代 Java 的文件操作
+
+### Files 工具类——一个类搞定常见操作
+
+```java
+Path path = Paths.get("data/users.json");
+
+// 读写文件——简洁到不像 Java
+String content = Files.readString(path);                    // 读全部
+List<String> lines = Files.readAllLines(path);             // 按行读
+Files.writeString(path, content);                           // 写全部（Java 11+）
+Files.write(path, lines, StandardOpenOption.APPEND);        // 追加
+
+// 文件操作
+Files.copy(path, Paths.get("backup.json"));                // 复制
+Files.move(path, Paths.get("archive/users.json"));          // 移动
+Files.deleteIfExists(path);                                 // 删除
+
+// 文件信息
+BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class);
+attrs.creationTime();
+attrs.lastModifiedTime();
+attrs.size();
+
+// 遍历目录
+try (Stream<Path> stream = Files.walk(Paths.get("src"))) {
+    stream.filter(Files::isRegularFile)
+          .filter(p -> p.toString().endsWith(".java"))
+          .forEach(System.out::println);
+}
+
+// 读取大文件——流式处理，不会 OOM
+try (Stream<String> stream = Files.lines(Paths.get("huge.log"))) {
+    stream.filter(line -> line.contains("ERROR"))
+          .limit(1000)
+          .forEach(System.out::println);
+}
+```
+
+::: warning Files.readAllLines() 的 OOM 风险
+`Files.readAllLines()` 一次性把所有行读入内存。如果文件很大（几 GB），直接 OOM。大文件用 `Files.lines()`（返回 Stream，惰性加载）或 `BufferedReader.readLine()`。
+:::
+
+## 面试高频题
+
+**Q1：BIO、NIO、AIO 的区别？**
+
+BIO（Blocking IO）：同步阻塞，一个连接一个线程。NIO（Non-blocking IO）：同步非阻塞 + 多路复用，一个线程处理多个连接（Selector）。AIO（Asynchronous IO）：异步非阻塞，发起 IO 操作后不等待，通过回调或 Future 获取结果（Java 7 的 `AsynchronousFileChannel`）。Netty 基于 NIO 封装，是实际开发中最常用的网络框架。
+
+**Q2：什么是零拷贝？**
+
+传统 IO：数据从磁盘 → 内核缓冲区 → 用户空间缓冲区 → Socket 缓冲区 → 网卡。4 次数据拷贝 + 4 次上下文切换。零拷贝（`transferTo` / `sendfile`）：数据从磁盘 → 内核缓冲区 → 网卡。2 次拷贝 + 2 次上下文切换。省去了用户空间的一次拷贝。
+
+**Q3：为什么 BufferedReader 比 FileReader 快？**
+
+FileReader 每次调用 `read()` 都是一次系统调用，系统调用开销大。BufferedReader 内部维护了一个 char 缓冲区（默认 8KB），先从系统一次读一大块数据到缓冲区，后续 `read()` 从缓冲区取，减少了系统调用次数。
+
+## 延伸阅读
+
+- 上一篇：[语法基础](syntax.md) — 数据类型、运算符、字符串
+- 下一篇：[泛型与注解](generics.md) — 类型擦除、PECS 原则
+- [Java 高级特性](../java-advanced/jvm.md) — JVM 原理、内存模型

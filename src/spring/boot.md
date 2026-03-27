@@ -11,368 +11,225 @@ tag:
 
 # Spring Boot
 
-Spring Boot简化了Spring应用的初始搭建和开发过程，提供自动配置和起步依赖。
+> Spring Boot 的本质不是什么新技术，而是一套"约定优于配置"的规范 + 自动配置机制 + Starter 依赖管理。它解决了传统 Spring 开发中最烦人的问题：写大量 XML 配置、依赖版本冲突、部署复杂。
 
-## 快速开始
+## 基础入门：Spring Boot 是什么？
 
-### 项目创建
+### 为什么需要 Spring Boot？
 
-```xml
-<!-- pom.xml -->
-<parent>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-parent</artifactId>
-    <version>3.2.0</version>
-</parent>
+```
+传统 Spring 开发的痛点：
+1. 大量 XML 配置（数据源、事务、MVC、AOP...）
+2. 依赖版本冲突（Spring 4 + Hibernate 5 + Jackson 2.x 兼容性...）
+3. 部署复杂（War 包 + Tomcat 配置 + JVM 参数...）
+4. 每个项目都要重复配置一样的东西
 
-<dependencies>
-    <dependency>
-        <groupId>org.springframework.boot</groupId>
-        <artifactId>spring-boot-starter-web</artifactId>
-    </dependency>
-</dependencies>
+Spring Boot 的解决方案：
+1. 自动配置（Auto Configuration）：根据 classpath 自动配置 Bean
+2. Starter 依赖：一个依赖搞定一组相关依赖（版本兼容性已处理好）
+3. 内嵌容器：不需要外部 Tomcat，java -jar 直接运行
+4. 配置简化：application.yml 替代 XML
 ```
 
-### 主类
+### 第一个 Spring Boot 应用
 
 ```java
-@SpringBootApplication
+// 启动类（一个就够了）
+@SpringBootApplication  // 自动配置 + 组件扫描
 public class Application {
     public static void main(String[] args) {
         SpringApplication.run(Application.class, args);
     }
 }
-```
 
-### Controller
-
-```java
-@RestController
-@RequestMapping("/api")
-public class HelloController {
-
-    @GetMapping("/hello")
-    public String hello() {
-        return "Hello, Spring Boot!";
-    }
-}
-```
-
-## 自动配置原理
-
-### @SpringBootApplication
-
-```java
-@SpringBootApplication 等价于：
-@SpringBootConfiguration       // 配置类
-@EnableAutoConfiguration       // 启用自动配置
-@ComponentScan                  // 组件扫描
-public class Application {}
-```
-
-### 条件装配
-
-```java
-// 常用条件注解
-@ConditionalOnClass          // 类路径存在指定类
-@ConditionalOnMissingClass   // 类路径不存在指定类
-@ConditionalOnBean           // 容器中存在指定Bean
-@ConditionalOnMissingBean    // 容器中不存在指定Bean
-@ConditionalOnProperty       // 配置属性满足条件
-@ConditionalOnWebApplication // Web应用环境
-@ConditionalOnExpression     // SpEL表达式为true
-```
-
-### 自动配置类
-
-```java
-// 查看自动配置报告
-// 启动参数：--debug
-// 或配置：debug=true
-
-// 排除自动配置
-@SpringBootApplication(exclude = {
-    DataSourceAutoConfiguration.class
-})
-// 或配置文件
-spring.autoconfigure.exclude=org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
-```
-
-## 配置管理
-
-### application.yml
-
-```yaml
-# 服务器配置
+// application.yml（核心配置）
 server:
   port: 8080
-  servlet:
-    context-path: /api
 
-# 数据源配置
 spring:
   datasource:
     url: jdbc:mysql://localhost:3306/mydb
     username: root
-    password: secret
-    driver-class-name: com.mysql.cj.jdbc.Driver
-    hikari:
-      maximum-pool-size: 10
+    password: root
+  redis:
+    host: localhost
+    port: 6379
 
-  # JPA配置
-  jpa:
-    hibernate:
-      ddl-auto: update
-    show-sql: true
-
-  # Redis配置
-  data:
-    redis:
-      host: localhost
-      port: 6379
-
-  # Kafka配置
-  kafka:
-    bootstrap-servers: localhost:9092
-
-# 自定义配置
-app:
-  name: My Application
-  version: 1.0.0
-  features:
-    enabled: true
+# 日志配置
+logging:
+  level:
+    com.example: debug
 ```
 
-### 配置类
+### 常用 Starter
 
-```java
-@ConfigurationProperties(prefix = "app")
-@Component
-@Data
-public class AppProperties {
-    private String name;
-    private String version;
-    private Features features;
-
-    @Data
-    public static class Features {
-        private boolean enabled;
-    }
-}
-
-// 启用配置属性扫描
-@EnableConfigurationProperties(AppProperties.class)
-@Configuration
-public class PropertiesConfig {}
-```
-
-### Profile配置
-
-```yaml
-# application-dev.yml
-spring:
-  datasource:
-    url: jdbc:h2:mem:testdb
-
-# application-prod.yml
-spring:
-  datasource:
-    url: jdbc:mysql://prod-db:3306/mydb
-
-# 激活Profile
-spring:
-  profiles:
-    active: dev
-```
-
-## Starter依赖
-
-### 常用Starter
-
-| Starter | 说明 |
+| Starter | 作用 |
 |---------|------|
-| spring-boot-starter-web | Web开发 |
-| spring-boot-starter-data-jpa | JPA数据访问 |
-| spring-boot-starter-data-redis | Redis |
-| spring-boot-starter-security | 安全框架 |
-| spring-boot-starter-validation | 参数校验 |
-| spring-boot-starter-actuator | 健康监控 |
-| spring-boot-starter-test | 测试 |
+| `spring-boot-starter-web` | Spring MVC + 内嵌 Tomcat |
+| `spring-boot-starter-data-jpa` | JPA + Hibernate |
+| `spring-boot-starter-data-redis` | Redis 客户端 |
+| `spring-boot-starter-security` | Spring Security |
+| `spring-boot-starter-validation` | 参数校验（JSR 380） |
+| `spring-boot-starter-test` | JUnit + Mockito + MockMvc |
 
-### 自定义Starter
+---
+
+## 自动配置原理——Spring Boot 的核心
+
+### `@SpringBootApplication` 做了什么？
 
 ```java
-// 1. 自动配置类
+@SpringBootApplication 等价于三个注解的组合：
+
+@SpringBootConfiguration     // 标记为配置类
+@EnableAutoConfiguration     // 启用自动配置 ← 核心
+@ComponentScan               // 扫描当前包及子包下的组件
+
+@EnableAutoConfiguration 的原理：
+1. 通过 @Import(AutoConfigurationImportSelector.class) 导入自动配置选择器
+2. AutoConfigurationImportSelector 读取 META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports
+3. 加载所有自动配置类（如 DataSourceAutoConfiguration、RedisAutoConfiguration）
+4. 每个自动配置类用 @ConditionalOnXxx 条件注解判断是否生效
+```
+
+### 自动配置生效的条件
+
+```java
+// 以 RedisAutoConfiguration 为例：
 @Configuration
-@ConditionalOnClass(MyService.class)
-@EnableConfigurationProperties(MyProperties.class)
-public class MyAutoConfiguration {
+@ConditionalOnClass(Redis.class)              // classpath 有 Redis 的类
+@EnableConfigurationProperties(RedisProperties.class)
+public class RedisAutoConfiguration {
 
     @Bean
-    @ConditionalOnMissingBean
-    public MyService myService(MyProperties properties) {
-        return new MyService(properties);
+    @ConditionalOnMissingBean(name = "redisTemplate")  // 容器中没有自定义的 redisTemplate
+    public RedisTemplate<String, Object> redisTemplate(RedisConnectionFactory factory) {
+        // 自动配置 RedisTemplate
     }
 }
-
-// 2. 配置属性
-@ConfigurationProperties(prefix = "my")
-public class MyProperties {
-    private String name;
-    private boolean enabled = true;
-}
-
-// 3. 注册自动配置
-// META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports
-com.example.MyAutoConfiguration
 ```
 
-## Actuator监控
+::: tip 自动配置的"让步"原则
+Spring Boot 的自动配置永远"让步"于你的自定义配置。如果你定义了自己的 `redisTemplate` Bean（`@ConditionalOnMissingBean` 不满足），Spring Boot 就不会创建默认的。这就是"约定优于配置"——约定好的默认行为，你随时可以覆盖。
+:::
 
-### 启用端点
+### 排除不需要的自动配置
+
+```java
+// 方式1：注解排除
+@SpringBootApplication(exclude = {DataSourceAutoConfiguration.class})
+
+// 方式2：配置文件排除
+spring.autoconfigure.exclude=org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+
+// 排查自动配置是否生效：启动时加 --debug
+// 会在日志中打印每个自动配置类的匹配/未匹配原因
+```
+
+## Starter——为什么不用自己管理依赖？
+
+```java
+// 传统 Spring：你要自己找依赖、自己管版本
+<dependency>
+    <groupId>org.springframework</groupId>
+    <artifactId>spring-webmvc</artifactId>
+    <version>5.3.20</version>  <!-- 版本冲突？自己解决 -->
+</dependency>
+<dependency>
+    <groupId>org.springframework</groupId>
+    <artifactId>spring-web</artifactId>
+    <version>5.3.20</version>
+</dependency>
+// 还有 jackson、tomcat、logback... 十几个依赖
+
+// Spring Boot：一个 Starter 搞定
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-web</artifactId>
+    <!-- 版本由 parent 管理，依赖由 starter 传递引入，零冲突 -->
+</dependency>
+```
+
+::: tip 自定义 Starter
+如果你的公司有一套通用的组件（如统一的 Redis 配置、封装的 RPC 客户端），可以做成自定义 Starter。核心是写一个自动配置类 + `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports` 文件。
+:::
+
+## 配置管理
+
+### 配置优先级（从高到低）
+
+```
+1. 命令行参数：java -jar app.jar --server.port=9090
+2. SPRING_APPLICATION_JSON 环境变量
+3. ServletConfig / ServletContext 参数
+4. JNDI 属性
+5. Java 系统属性：System.getProperties()
+6. 操作系统环境变量
+7. application-{profile}.yml / .properties
+8. application.yml / .properties
+9. @PropertySource 注解指定的配置文件
+10. 默认值（@Value 的默认值）
+```
+
+::: warning 配置陷阱
+`application-dev.yml` 中的配置会覆盖 `application.yml` 中的同名配置，不是合并。如果某个配置在 `application.yml` 中设置了但没有在 `application-dev.yml` 中设置，则使用 `application.yml` 的值。这个行为很直观，但很容易忘记哪个 profile 里配了什么。
+:::
+
+### 配置绑定
+
+```java
+// 方式1：@Value（适合少量配置）
+@Value("${app.name:default-name}")
+private String appName;
+
+// 方式2：@ConfigurationProperties（适合批量配置，推荐）
+@ConfigurationProperties(prefix = "app.mail")
+@Component
+@Data
+public class MailProperties {
+    private String host;
+    private int port = 587;
+    private String username;
+    private String password;
+    private boolean sslEnabled = true;
+}
+
+// yml 中：
+// app:
+//   mail:
+//     host: smtp.gmail.com
+//     username: xxx@gmail.com
+```
+
+## Actuator——生产级监控
 
 ```yaml
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics,env,beans
+        include: health,info,metrics,env  # 暴露哪些端点
   endpoint:
     health:
-      show-details: always
+      show-details: always  # 显示详细健康信息
 ```
 
-### 常用端点
+::: danger 生产环境不要暴露所有端点
+`/actuator/env` 会暴露所有环境变量（包括数据库密码等敏感信息）。生产环境只暴露必要的端点，敏感端点需要认证。`/actuator/beans` 暴露所有 Bean 定义，也可能存在安全风险。
+:::
 
-| 端点 | 说明 |
-|------|------|
-| /actuator/health | 健康检查 |
-| /actuator/info | 应用信息 |
-| /actuator/metrics | 指标信息 |
-| /actuator/env | 环境变量 |
-| /actuator/beans | Bean列表 |
-| /actuator/mappings | URL映射 |
+## 面试高频题
 
-### 自定义健康检查
+**Q1：Spring Boot 的启动流程？**
 
-```java
-@Component
-public class MyHealthIndicator implements HealthIndicator {
-    @Override
-    public Health health() {
-        // 检查逻辑
-        boolean healthy = checkHealth();
-        if (healthy) {
-            return Health.up()
-                .withDetail("service", "my-service")
-                .withDetail("status", "running")
-                .build();
-        } else {
-            return Health.down()
-                .withDetail("error", "Service unavailable")
-                .build();
-        }
-    }
-}
-```
+1. 创建 `SpringApplication` 对象（推断应用类型、加载初始化器和监听器）；2. 执行 `run()` 方法：准备 Environment → 打印 Banner → 创建 ApplicationContext → 加载 Bean 定义（包括自动配置）→ 刷新上下文（实例化 Bean、注入依赖、执行 BeanPostProcessor）→ 发布启动完成事件。
 
-## 启动流程
+**Q2：Spring Boot 打包为什么能直接运行？**
 
-```java
-// SpringApplication启动流程
-1. 创建 SpringApplication 对象
-   - 判断应用类型（Servlet/Reactive）
-   - 加载初始化器（Initializer）
-   - 加载监听器（Listener）
+`spring-boot-maven-plugin` 把所有依赖打包到一个 FAT JAR 中，同时在 `META-INF/MANIFEST.MF` 中指定了 `Main-Class: org.springframework.boot.loader.JarLauncher` 和 `Start-Class: 你的主类`。`JarLauncher` 从内嵌的 `BOOT-INF/lib/` 中加载依赖，然后调用你的主类的 `main` 方法。
 
-2. 执行 run 方法
-   - 准备环境（Environment）
-   - 打印Banner
-   - 创建 ApplicationContext
-   - 准备上下文
-   - 刷新上下文（加载Bean、自动配置）
-   - 发布启动完成事件
+## 延伸阅读
 
-// 自定义启动逻辑
-@SpringBootApplication
-public class Application implements ApplicationRunner {
-    public static void main(String[] args) {
-        SpringApplication.run(Application.class, args);
-    }
-
-    @Override
-    public void run(ApplicationArguments args) {
-        System.out.println("应用启动完成");
-    }
-}
-
-// CommandLineRunner - 更简单的参数处理
-@Component
-public class StartupRunner implements CommandLineRunner {
-    @Override
-    public void run(String... args) {
-        System.out.println("启动参数: " + Arrays.toString(args));
-    }
-}
-```
-
-## 打包部署
-
-### JAR打包
-
-```xml
-<build>
-    <plugins>
-        <plugin>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-maven-plugin</artifactId>
-        </plugin>
-    </plugins>
-</build>
-```
-
-```bash
-# 打包
-mvn clean package
-
-# 运行
-java -jar target/myapp.jar
-
-# 指定配置
-java -jar myapp.jar --spring.profiles.active=prod
-
-# 指定端口
-java -jar myapp.jar --server.port=9090
-```
-
-### WAR打包
-
-```xml
-<packaging>war</packaging>
-
-<dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-tomcat</artifactId>
-    <scope>provided</scope>
-</dependency>
-```
-
-```java
-@SpringBootApplication
-public class Application extends SpringBootServletInitializer {
-    @Override
-    protected SpringApplicationBuilder configure(SpringApplicationBuilder builder) {
-        return builder.sources(Application.class);
-    }
-}
-```
-
-## 小结
-
-| 特性 | 说明 |
-|------|------|
-| 自动配置 | 根据依赖自动配置Bean |
-| Starter | 一站式依赖管理 |
-| Actuator | 生产级监控 |
-| 外部化配置 | 配置文件、环境变量、命令行 |
-| 内嵌容器 | Tomcat/Jetty/Undertow |
+- 上一篇：[Spring AOP](aop.md) — 切面编程、代理机制
+- 下一篇：[Spring MVC](mvc.md) — RESTful API、参数校验
+- [Spring Cloud](cloud.md) — 微服务架构、服务治理

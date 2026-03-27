@@ -10,322 +10,245 @@ tag:
   - 内存模型
 ---
 
-# JVM原理
+# JVM 原理
 
-Java虚拟机（JVM）是Java程序运行的核心，理解JVM原理对于编写高性能Java程序至关重要。
+> 很多人觉得 JVM 是"面试八股文"，和实际开发关系不大。但当你遇到线上 OOM、CPU 100%、GC 停顿导致超时、Metaspace 溢出等问题时，JVM 知识就是救命稻草。这篇文章帮你建立一套系统的 JVM 知识框架。
 
-## JVM架构
+## JVM 架构——一张图看懂
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        JVM架构                               │
-├─────────────────────────────────────────────────────────────┤
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
-│  │ 类加载器    │→ │ 运行时数据区 │← │    本地库接口(NI)   │  │
-│  │ 子系统      │  │             │  │                     │  │
-│  └─────────────┘  └─────────────┘  └─────────────────────┘  │
-│                          ↓                                   │
-│                  ┌─────────────┐                            │
-│                  │  执行引擎   │                            │
-│                  └─────────────┘                            │
-└─────────────────────────────────────────────────────────────┘
-```
+```mermaid
+graph TD
+    subgraph input[" "]
+        CF["Class File（字节码）"]
+    end
+    CF --> CL["类加载器子系统<br/>Bootstrap → Extension → Application"]
+    CL --> RD["运行时数据区"]
 
-## 运行时数据区
+    subgraph RD["运行时数据区"]
+        direction TB
+        subgraph shared["线程共享"]
+            Heap["堆（几乎所有对象）"]
+            Method["方法区 / 元空间（类信息、常量）"]
+        end
+        subgraph private["线程私有 × N"]
+            PC["程序计数器"]
+            Stack["虚拟机栈（栈帧）"]
+            Native["本地方法栈"]
+        end
+    end
 
-### 程序计数器
-
-- 线程私有
-- 存储当前线程执行的字节码指令地址
-- 唯一没有OOM的区域
-
-### Java虚拟机栈
-
-```java
-// 栈帧结构
-┌──────────────────────────┐
-│     局部变量表            │  ← 存储方法参数和局部变量
-├──────────────────────────┤
-│     操作数栈              │  ← 计算过程中的中间结果
-├──────────────────────────┤
-│     动态链接              │  ← 指向运行时常量池的方法引用
-├──────────────────────────┤
-│     方法返回地址          │  ← 方法退出后的返回地址
-├──────────────────────────┤
-│     附加信息              │
-└──────────────────────────┘
+    RD --> Engine["执行引擎"]
+    subgraph Engine["执行引擎"]
+        Interpreter["解释器"]
+        JIT["JIT 编译器"]
+        GC["垃圾回收器"]
+    end
 ```
 
-```java
-// 栈溢出示例
-public class StackOverflowDemo {
-    private int count = 0;
+## 运行时数据区——每个区域存什么？
 
-    public void recursive() {
-        count++;
-        recursive();  // 无限递归
-    }
-
-    public static void main(String[] args) {
-        StackOverflowDemo demo = new StackOverflowDemo();
-        try {
-            demo.recursive();
-        } catch (StackOverflowError e) {
-            System.out.println("栈深度: " + demo.count);
-        }
-    }
-}
+```mermaid
+graph TD
+    subgraph private["线程私有 x N"]
+        PC[程序计数器]
+        Stack[虚拟机栈 栈帧]
+        Native[本地方法栈]
+    end
+    subgraph shared["线程共享"]
+        Heap[堆 几乎所有对象]
+        Meta[方法区 / 元空间]
+    end
 ```
 
-### 本地方法栈
+### 线程私有 vs 线程共享
 
-- 为Native方法服务
-- 线程私有
+```
+线程私有（每个线程一份）：
+  - 程序计数器：当前执行的字节码行号
+  - 虚拟机栈：方法调用的栈帧（局部变量表、操作数栈、动态链接、返回地址）
+  - 本地方法栈：Native 方法的栈（如 Object.hashCode() 底层是 native）
 
-### 堆
-
-```java
-// 堆内存结构（JDK 8+）
-┌─────────────────────────────────────────────────────┐
-│                      堆内存                          │
-├────────────────┬────────────────┬───────────────────┤
-│   年轻代       │                │                   │
-│  ┌─────┬─────┐ │    老年代      │                   │
-│  │ Eden│ S1  │ │    (Old)       │                   │
-│  │     │ S0  │ │                │                   │
-│  └─────┴─────┘ │                │                   │
-└────────────────┴────────────────┴───────────────────┘
+线程共享（所有线程共用）：
+  - 堆：几乎所有对象都在这里分配
+  - 方法区：类信息、常量、静态变量（JDK 8+ 叫元空间 Metaspace）
 ```
 
-### 方法区
+### 虚拟机栈——方法调用的账本
 
-- 存储类信息、常量、静态变量
-- JDK 7：永久代（PermGen）
-- JDK 8+：元空间（Metaspace），使用本地内存
-
-### 运行时常量池
-
-```java
-public class ConstantPoolDemo {
-    public static void main(String[] args) {
-        // 字符串常量池
-        String s1 = "Hello";
-        String s2 = "Hello";
-        String s3 = new String("Hello");
-        String s4 = s3.intern();
-
-        System.out.println(s1 == s2);  // true
-        System.out.println(s1 == s3);  // false
-        System.out.println(s1 == s4);  // true
-
-        // Integer缓存池（-128 ~ 127）
-        Integer i1 = 127;
-        Integer i2 = 127;
-        Integer i3 = 128;
-        Integer i4 = 128;
-
-        System.out.println(i1 == i2);  // true
-        System.out.println(i3 == i4);  // false
-    }
-}
+```mermaid
+graph TD
+    subgraph "虚拟机栈"
+        F1["main() 的栈帧<br/>局部变量: args, localVar<br/>操作数栈"]
+        F2["calculate() 的栈帧<br/>局部变量: x, y, result"]
+        F1 -->|"调用 calculate"| F2
+    end
+    F2 -->|"方法返回，栈帧出栈"| END["继续执行 main()"]
 ```
 
-## 对象内存布局
+::: danger StackOverflowError 的典型场景
+递归没有终止条件、方法调用链太深（如 A → B → C → ... → A 循环调用）。默认栈大小是 1MB（`-Xss1m`），每个栈帧大约 1KB，所以大约能嵌套 1000 层。如果需要更深的递归，可以增大 `-Xss`，但更好的做法是检查是否有 bug。
+:::
 
-```java
-// 对象结构
-┌─────────────────────────────────┐
-│         对象头 (Header)          │
-│  ┌─────────────────────────────┐│
-│  │ Mark Word (8字节)           ││  ← 哈希码、GC分代年龄、锁状态
-│  ├─────────────────────────────┤│
-│  │ 类型指针 (4/8字节)          ││  ← 指向类元数据
-│  ├─────────────────────────────┤│
-│  │ 数组长度 (仅数组对象)       ││
-│  └─────────────────────────────┘│
-├─────────────────────────────────┤
-│         实例数据 (Data)          │
-│  字段数据...                    │
-├─────────────────────────────────┤
-│         对齐填充 (Padding)       │
-│  保证对象大小是8字节的倍数      │
-└─────────────────────────────────┘
+### 堆——对象的家园
+
+
+```mermaid
+graph TD
+    subgraph "堆（Heap）"
+        subgraph young["年轻代（1/3）"]
+            Eden["Eden（80%）"]
+            S0["Survivor 0（10%）"]
+            S1["Survivor 1（10%）"]
+        end
+        subgraph old["老年代（2/3）"]
+            Old["Old Gen"]
+        end
+    end
+    Eden -->|"Minor GC<br/>存活对象复制"| S0
+    S0 -->|"下一次 GC<br/>交换"| S1
+    S1 -->|"年龄达 15<br/>晋升"| Old
+```
+
+### 方法区 vs 元空间
+
+```
+JDK 7 及之前：永久代（PermGen）
+  - 在 JVM 堆内存中
+  - 大小固定，容易 OOM
+  - 字符串常量池在永久代
+
+JDK 8+：元空间（Metaspace）
+  - 使用本地内存（Native Memory）
+  - 大小理论上只受物理内存限制
+  - 字符串常量池移到堆中
+  - 更不容易 OOM，但仍需监控：-XX:MaxMetaspaceSize=256m
 ```
 
 ## 类加载机制
 
-### 类加载过程
-
-```java
-// 类加载流程
-┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐
-│  加载   │ →  │  连接   │ →  │  初始化 │ →  │   使用  │
-└─────────┘    └─────────┘    └─────────┘    └─────────┘
-                   │
-        ┌──────────┼──────────┐
-        ↓          ↓          ↓
-   ┌─────────┐ ┌─────────┐ ┌─────────┐
-   │  验证   │ │  准备   │ │  解析   │
-   └─────────┘ └─────────┘ └─────────┘
-```
-
-### 类加载器
-
-```java
-// 类加载器层次
-┌─────────────────────────────────────┐
-│        Bootstrap ClassLoader        │  ← 加载核心类库（rt.jar等）
-│         (启动类加载器)              │
-├─────────────────────────────────────┤
-│       Extension ClassLoader         │  ← 加载扩展类库（ext目录）
-│         (扩展类加载器)              │
-├─────────────────────────────────────┤
-│       Application ClassLoader       │  ← 加载应用程序类路径
-│         (应用类加载器)              │
-├─────────────────────────────────────┤
-│        Custom ClassLoader           │  ← 自定义类加载器
-│         (自定义类加载器)            │
-└─────────────────────────────────────┘
-```
-
 ### 双亲委派模型
 
-```java
-public class ClassLoaderDemo {
-    public static void main(String[] args) {
-        ClassLoader loader = ClassLoaderDemo.class.getClassLoader();
-        System.out.println("当前类加载器: " + loader);
-        System.out.println("父加载器: " + loader.getParent());
-        System.out.println("祖父加载器: " + loader.getParent().getParent());
+```mermaid
+graph TD
+    subgraph request["1. 加载请求：自定义 ClassLoader"]
+        C1["自定义 ClassLoader<br/>（加载项目中的类）"]
+    end
 
-        // String类由Bootstrap ClassLoader加载
-        ClassLoader stringLoader = String.class.getClassLoader();
-        System.out.println("String类加载器: " + stringLoader);  // null
-    }
-}
+    C1 -->|"委托"| C2["Application ClassLoader<br/>（加载 classpath 下的类）"]
+    C2 -->|"委托"| C3["Extension ClassLoader<br/>（加载 jre/lib/ext）"]
+    C3 -->|"委托"| C4["Bootstrap ClassLoader<br/>（C++ 实现，加载 rt.jar）"]
 
-// 自定义类加载器
-class CustomClassLoader extends ClassLoader {
-    private String classPath;
-
-    public CustomClassLoader(String classPath) {
-        this.classPath = classPath;
-    }
-
-    @Override
-    protected Class<?> findClass(String name) throws ClassNotFoundException {
-        try {
-            byte[] data = loadClassData(name);
-            return defineClass(name, data, 0, data.length);
-        } catch (IOException e) {
-            throw new ClassNotFoundException(name, e);
-        }
-    }
-
-    private byte[] loadClassData(String name) throws IOException {
-        String fileName = classPath + name.replace('.', '/') + ".class";
-        try (InputStream is = new FileInputStream(fileName);
-             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-            byte[] buffer = new byte[1024];
-            int len;
-            while ((len = is.read(buffer)) != -1) {
-                baos.write(buffer, 0, len);
-            }
-            return baos.toByteArray();
-        }
-    }
-}
+    C4 -->|"能加载？"| D1{"找到了？"}
+    D1 -->|"是"| R1["✅ 直接加载"]
+    D1 -->|"否"| C5["交回给 Extension ClassLoader"]
+    C5 --> D2{"找到了？"}
+    D2 -->|"是"| R2["✅ 加载"]
+    D2 -->|"否"| C6["交回给 Application ClassLoader"]
+    C6 --> D3{"找到了？"}
+    D3 -->|"是"| R3["✅ 加载"]
+    D3 -->|"否"| R4["交回给自定义 ClassLoader<br/>✅ 加载 / ❌ ClassNotFoundException"]
 ```
 
-## 即时编译器（JIT）
+::: tip 为什么要有双亲委派？
+1. **安全性**：防止自定义 `java.lang.String` 替换核心类
+2. **避免重复加载**：父加载器已经加载过的类，子加载器不需要再加载
+3. **层次清晰**：每个加载器有明确的职责范围
+:::
 
-### 编译优化
+### 打破双亲委派的场景
 
 ```java
-// 方法内联
-public class InlineDemo {
-    // 原始代码
-    public int add(int a, int b) {
-        return a + b;
-    }
+// 1. SPI 机制（Service Provider Interface）
+// 如 JDBC、JNDI：核心接口在 rt.jar（Bootstrap 加载）
+// 具体实现在 classpath（Application 加载）
+// Bootstrap 加载不到 classpath 的类 → 用 Thread.getContextClassLoader()
 
-    public int calculate(int x) {
-        return add(x, 10);  // JIT会内联这个方法调用
-    }
+// 2. Tomcat
+// 一个 Tomcat 部署多个 Web 应用，可能依赖同一个库的不同版本
+// 每个应用有自己的 WebAppClassLoader，优先加载自己的类
+// → 打破了双亲委派
 
-    // 内联后（等效代码）
-    public int calculateInlined(int x) {
-        return x + 10;
-    }
-}
-
-// 逃逸分析
-public class EscapeAnalysisDemo {
-    // 对象不逃逸，可能被优化为栈上分配
-    public void process() {
-        Point p = new Point(1, 2);  // 不逃逸
-        System.out.println(p.x + p.y);
-    }
-
-    // 对象逃逸
-    public Point createPoint() {
-        return new Point(1, 2);  // 逃逸
-    }
-}
-
-class Point {
-    int x, y;
-    Point(int x, int y) {
-        this.x = x;
-        this.y = y;
-    }
-}
+// 3. OSGi
+// 模块化框架，每个 Bundle 有自己的 ClassLoader
+// 形成网状的委派关系，不再是树状
 ```
 
-## JVM参数
+## JIT 编译——让 Java 跑得更快
+
+### 为什么需要 JIT？
+
+```
+解释执行：每次运行都逐条解释字节码 → 慢
+JIT 编译：把热点代码编译成机器码 → 快（接近 C/C++）
+
+Java 的策略：混合模式
+  - 先解释执行
+  - 发现热点代码（调用次数超过阈值，默认 10000 次）
+  - JIT 编译为机器码
+  - 后续直接执行机器码
+
+// 查看 JIT 编译情况：
+// -XX:+PrintCompilation  （JDK 8）
+// -Xlog:compilation=debug （JDK 9+）
+```
+
+### 逃逸分析——JIT 的魔法
+
+```java
+// 逃逸分析：判断对象的使用范围是否"逃出"了当前方法
+
+// 不逃逸：对象只在方法内部使用
+public int calculate() {
+    Point p = new Point(1, 2);  // 不逃出方法
+    return p.x + p.y;
+}
+// JIT 可能优化：不需要在堆上分配，直接在栈上分配（标量替换）
+
+// 逃逸：对象被返回或存到外部
+public Point createPoint() {
+    return new Point(1, 2);  // 逃逸了，必须在堆上分配
+}
+
+// 逃逸分析的三个优化方向：
+// 1. 栈上分配：对象在栈上创建，方法结束自动销毁，减少 GC 压力
+// 2. 标量替换：不创建对象，而是把对象的字段拆开作为局部变量使用
+// 3. 锁消除：如果对象不逃出线程，synchronized 可以去掉
+```
+
+## 常见 OOM 场景与排查
+
+| OOM 类型 | 原因 | 排查方式 |
+|----------|------|----------|
+| `Java heap space` | 堆内存不足 | `jmap -histo` 看大对象，MAT 分析堆转储 |
+| `Metaspace` | 加载的类太多（动态代理、Groovy） | 检查是否有无限创建类的情况 |
+| `Direct buffer memory` | 堆外内存不足（NIO、Netty） | `-XX:MaxDirectMemorySize` 调大 |
+| `unable to create new native thread` | 线程太多（线程池配置不当） | `jstack` 看线程数，检查线程池配置 |
+| `GC overhead limit exceeded` | GC 花了 98% 时间但只回收了不到 2% | 通常是堆太小或内存泄漏 |
 
 ```bash
-# 堆内存设置
--Xms512m          # 初始堆大小
--Xmx2g            # 最大堆大小
--Xmn256m          # 年轻代大小
-
-# 栈内存设置
--Xss256k          # 每个线程的栈大小
-
-# 元空间设置（JDK 8+）
--XX:MetaspaceSize=128m
--XX:MaxMetaspaceSize=256m
-
-# GC设置
--XX:+UseG1GC              # 使用G1收集器
--XX:+UseZGC               # 使用ZGC（JDK 15+）
--XX:MaxGCPauseMillis=200  # 最大GC停顿时间
-
-# GC日志
--Xlog:gc*:file=gc.log
-
-# OOM时生成堆转储
+# OOM 时自动生成堆转储
 -XX:+HeapDumpOnOutOfMemoryError
--XX:HeapDumpPath=dump.hprof
+-XX:HeapDumpPath=/tmp/heap.hprof
+
+# 然后用 MAT (Memory Analyzer Tool) 或 VisualVM 分析
 ```
 
-## 小结
+## 面试高频题
 
-JVM核心组件：
+**Q1：JVM 内存模型（JMM）和 JVM 运行时数据区有什么区别？**
 
-| 组件 | 作用 |
-|------|------|
-| 类加载器 | 加载.class文件 |
-| 运行时数据区 | 存储程序运行数据 |
-| 执行引擎 | 执行字节码 |
-| JIT编译器 | 即时编译优化 |
+JMM（Java Memory Model）是 Java 内存模型，定义了线程之间的可见性、有序性规则（volatile、synchronized、final 的语义），是并发编程的规范。运行时数据区是 JVM 运行时的内存布局（堆、栈、方法区等），是 JVM 的实现。两者名字很像但完全不同的概念。
 
-内存区域：
+**Q2：方法区、永久代、元空间的关系？**
 
-| 区域 | 特点 |
-|------|------|
-| 堆 | 对象存储，GC主要区域 |
-| 栈 | 方法调用，线程私有 |
-| 方法区 | 类信息、常量 |
-| 程序计数器 | 指令地址 |
+方法区是 JVM 规范中的一个概念。永久代是 JDK 7 中方法区的实现。元空间是 JDK 8+ 中方法区的实现，从 JVM 堆移到了本地内存。字符串常量池从永久代移到了堆中。
+
+**Q3：一个 Java 对象在内存中占多少字节？**
+
+对象头（12 字节：Mark Word 8B + 类型指针 4B）+ 实例数据 + 对齐填充（保证是 8 的倍数）。例如一个空 Object 对象 = 12B 头 + 0B 数据 + 4B 填充 = 16B。一个 `int` 字段 = 4B，一个对象引用 = 4B（开启压缩指针）或 8B。
+
+## 延伸阅读
+
+- 下一篇：[垃圾回收](gc.md) — GC 算法、收集器选择、调优实战
+- [性能调优](tuning.md) — JVM 参数、Arthas 诊断、常见问题排查
+- [并发编程](../java-basic/concurrency.md) — 线程安全、锁机制、AQS

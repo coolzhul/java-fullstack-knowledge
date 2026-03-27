@@ -9,624 +9,128 @@ tag:
   - 设计模式
 ---
 
-# Java设计模式
+# Java 设计模式
 
-设计模式是软件开发中经过验证的解决方案，掌握设计模式有助于编写可维护、可扩展的代码。
+> 设计模式不是"背下来面试用"的。每个设计模式都是为了解决一个真实的设计问题。理解了问题，模式就自然记住了。
 
-## 设计模式分类
+## 什么是设计模式？
 
-| 类型 | 模式数量 | 说明 |
-|------|----------|------|
-| 创建型 | 5种 | 对象创建机制 |
-| 结构型 | 7种 | 对象组合方式 |
-| 行为型 | 11种 | 对象通信方式 |
+设计模式是前辈们在大量软件项目中总结出来的**可复用的解决方案模板**。1994 年 GoF（四人帮）出版了《设计模式》一书，总结了 23 种经典设计模式，分为三大类：
+
+```mermaid
+graph TD
+    subgraph creational["创建型（5 种）——怎么创建对象"]
+        direction LR
+        S1["单例"] ~~~ S2["工厂方法"] ~~~ S3["抽象工厂"] ~~~ S4["建造者"] ~~~ S5["原型"]
+    end
+    subgraph structural["结构型（7 种）——怎么组合对象"]
+        direction LR
+        T1["适配器"] ~~~ T2["桥接"] ~~~ T3["组合"] ~~~ T4["装饰器"] ~~~ T5["外观"] ~~~ T6["代理"] ~~~ T7["享元"]
+    end
+    subgraph behavioral["行为型（11 种）——对象怎么协作"]
+        direction LR
+        B1["策略"] ~~~ B2["观察者"] ~~~ B3["模板方法"] ~~~ B4["责任链"] ~~~ B5["命令"]
+        B5 ~~~ B6["状态"] ~~~ B7["迭代器"] ~~~ B8["中介者"] ~~~ B9["备忘录"] ~~~ B10["访问者"] ~~~ B11["解释器"]
+    end
+```
+
+::: tip 一句话理解设计模式的核心原则
+**开闭原则**——对扩展开放，对修改关闭。好的设计让新增功能时不需要改已有代码。
+:::
+
+## 使用频率排序
+
+| 排名 | 模式 | 分类 | 频率 | Spring 中的应用 |
+|------|------|------|------|---------------|
+| 1 | [单例](design-patterns/singleton.md) | 创建型 | ⭐⭐⭐⭐⭐ | Bean 默认 scope |
+| 2 | [工厂方法](design-patterns/factory-method.md) | 创建型 | ⭐⭐⭐⭐⭐ | BeanFactory |
+| 3 | [策略](design-patterns/strategy.md) | 行为型 | ⭐⭐⭐⭐⭐ | 多实现注入 |
+| 4 | [代理](design-patterns/proxy.md) | 结构型 | ⭐⭐⭐⭐⭐ | AOP |
+| 5 | [模板方法](design-patterns/template-method.md) | 行为型 | ⭐⭐⭐⭐ | 各种 Template |
+| 6 | [观察者](design-patterns/observer.md) | 行为型 | ⭐⭐⭐⭐ | ApplicationEvent |
+| 7 | [建造者](design-patterns/builder.md) | 创建型 | ⭐⭐⭐⭐ | Lombok @Builder |
+| 8 | [责任链](design-patterns/chain-of-responsibility.md) | 行为型 | ⭐⭐⭐⭐ | FilterChain |
+| 9 | [装饰器](design-patterns/decorator.md) | 结构型 | ⭐⭐⭐ | BeanWrapper |
+| 10 | [适配器](design-patterns/adapter.md) | 结构型 | ⭐⭐⭐ | HandlerAdapter |
+| 11 | [抽象工厂](design-patterns/abstract-factory.md) | 创建型 | ⭐⭐⭐ | 跨平台组件 |
+| 12 | [外观](design-patterns/facade.md) | 结构型 | ⭐⭐⭐ | JdbcTemplate |
+| 13 | [状态](design-patterns/state.md) | 行为型 | ⭐⭐⭐ | 状态机 |
+| 14 | [享元](design-patterns/flyweight.md) | 结构型 | ⭐⭐ | String 常量池 |
+| 15 | [命令](design-patterns/command.md) | 行为型 | ⭐⭐ | @Retryable |
+| 16 | [桥接](design-patterns/bridge.md) | 结构型 | ⭐⭐ | JDBC Driver |
+| 17 | [组合](design-patterns/composite.md) | 结构型 | ⭐⭐ | 文件系统 |
+| 18 | [中介者](design-patterns/mediator.md) | 行为型 | ⭐⭐ | DispatcherServlet |
+| 19 | [迭代器](design-patterns/iterator.md) | 行为型 | ⭐⭐ | Java Iterator |
+| 20 | [备忘录](design-patterns/memento.md) | 行为型 | ⭐⭐ | Local History |
+| 21 | [原型](design-patterns/prototype.md) | 创建型 | ⭐⭐ | Cloneable |
+| 22 | [访问者](design-patterns/visitor.md) | 行为型 | ⭐⭐ | ASM 字节码 |
+| 23 | [解释器](design-patterns/interpreter.md) | 行为型 | ⭐⭐ | SpEL |
 
 ## 创建型模式
 
-### 1. 单例模式
+> 关注"怎么创建对象"，将对象的创建和使用分离。
 
-```java
-// 饿汉式（线程安全）
-public class EagerSingleton {
-    private static final EagerSingleton INSTANCE = new EagerSingleton();
-
-    private EagerSingleton() {}
-
-    public static EagerSingleton getInstance() {
-        return INSTANCE;
-    }
-}
-
-// 懒汉式（双重检查锁）
-public class LazySingleton {
-    private static volatile LazySingleton instance;
-
-    private LazySingleton() {}
-
-    public static LazySingleton getInstance() {
-        if (instance == null) {
-            synchronized (LazySingleton.class) {
-                if (instance == null) {
-                    instance = new LazySingleton();
-                }
-            }
-        }
-        return instance;
-    }
-}
-
-// 静态内部类（推荐）
-public class StaticInnerSingleton {
-    private StaticInnerSingleton() {}
-
-    private static class Holder {
-        static final StaticInnerSingleton INSTANCE = new StaticInnerSingleton();
-    }
-
-    public static StaticInnerSingleton getInstance() {
-        return Holder.INSTANCE;
-    }
-}
-
-// 枚举（最佳实践）
-public enum EnumSingleton {
-    INSTANCE;
-
-    public void doSomething() {
-        System.out.println("Singleton method");
-    }
-}
-```
-
-### 2. 工厂模式
-
-```java
-// 简单工厂
-interface Product {
-    void use();
-}
-
-class ProductA implements Product {
-    @Override
-    public void use() {
-        System.out.println("Using Product A");
-    }
-}
-
-class ProductB implements Product {
-    @Override
-    public void use() {
-        System.out.println("Using Product B");
-    }
-}
-
-class SimpleFactory {
-    public static Product create(String type) {
-        return switch (type) {
-            case "A" -> new ProductA();
-            case "B" -> new ProductB();
-            default -> throw new IllegalArgumentException("Unknown type");
-        };
-    }
-}
-
-// 工厂方法
-interface Factory {
-    Product create();
-}
-
-class FactoryA implements Factory {
-    @Override
-    public Product create() {
-        return new ProductA();
-    }
-}
-
-class FactoryB implements Factory {
-    @Override
-    public Product create() {
-        return new ProductB();
-    }
-}
-
-// 抽象工厂
-interface AbstractFactory {
-    Button createButton();
-    Checkbox createCheckbox();
-}
-
-class WindowsFactory implements AbstractFactory {
-    @Override
-    public Button createButton() {
-        return new WindowsButton();
-    }
-
-    @Override
-    public Checkbox createCheckbox() {
-        return new WindowsCheckbox();
-    }
-}
-
-class MacFactory implements AbstractFactory {
-    @Override
-    public Button createButton() {
-        return new MacButton();
-    }
-
-    @Override
-    public Checkbox createCheckbox() {
-        return new MacCheckbox();
-    }
-}
-```
-
-### 3. 建造者模式
-
-```java
-public class Computer {
-    private final String cpu;
-    private final String ram;
-    private final String storage;
-    private final String gpu;
-
-    private Computer(Builder builder) {
-        this.cpu = builder.cpu;
-        this.ram = builder.ram;
-        this.storage = builder.storage;
-        this.gpu = builder.gpu;
-    }
-
-    public static class Builder {
-        private String cpu;
-        private String ram;
-        private String storage;
-        private String gpu;
-
-        public Builder cpu(String cpu) {
-            this.cpu = cpu;
-            return this;
-        }
-
-        public Builder ram(String ram) {
-            this.ram = ram;
-            return this;
-        }
-
-        public Builder storage(String storage) {
-            this.storage = storage;
-            return this;
-        }
-
-        public Builder gpu(String gpu) {
-            this.gpu = gpu;
-            return this;
-        }
-
-        public Computer build() {
-            return new Computer(this);
-        }
-    }
-}
-
-// 使用
-Computer computer = new Computer.Builder()
-    .cpu("Intel i7")
-    .ram("16GB")
-    .storage("512GB SSD")
-    .gpu("RTX 3080")
-    .build();
-```
-
-### 4. 原型模式
-
-```java
-public class Prototype implements Cloneable {
-    private String name;
-    private List<String> items;
-
-    public Prototype(String name) {
-        this.name = name;
-        this.items = new ArrayList<>();
-    }
-
-    // 浅拷贝
-    @Override
-    public Prototype clone() {
-        try {
-            return (Prototype) super.clone();
-        } catch (CloneNotSupportedException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    // 深拷贝
-    public Prototype deepClone() {
-        Prototype clone = this.clone();
-        clone.items = new ArrayList<>(this.items);
-        return clone;
-    }
-}
-```
+| 模式 | 一句话 | 适用场景 |
+|------|--------|---------|
+| [单例](design-patterns/singleton.md) | 全局只有一个实例 | 连接池、配置管理 |
+| [工厂方法](design-patterns/factory-method.md) | 子类决定创建哪个产品 | 不同数据库的 DAO |
+| [抽象工厂](design-patterns/abstract-factory.md) | 创建一族相关产品 | 跨平台 UI 组件 |
+| [建造者](design-patterns/builder.md) | 分步构建复杂对象 | 参数多的对象构造 |
+| [原型](design-patterns/prototype.md) | 通过克隆创建新对象 | 创建成本高的对象 |
 
 ## 结构型模式
 
-### 1. 适配器模式
+> 关注"怎么组合类和对象"，形成更大的结构。
 
-```java
-// 目标接口
-interface Target {
-    void request();
-}
-
-// 被适配者
-class Adaptee {
-    public void specificRequest() {
-        System.out.println("Specific request");
-    }
-}
-
-// 类适配器
-class ClassAdapter extends Adaptee implements Target {
-    @Override
-    public void request() {
-        specificRequest();
-    }
-}
-
-// 对象适配器（推荐）
-class ObjectAdapter implements Target {
-    private final Adaptee adaptee;
-
-    public ObjectAdapter(Adaptee adaptee) {
-        this.adaptee = adaptee;
-    }
-
-    @Override
-    public void request() {
-        adaptee.specificRequest();
-    }
-}
-```
-
-### 2. 装饰器模式
-
-```java
-interface Coffee {
-    double cost();
-    String description();
-}
-
-class SimpleCoffee implements Coffee {
-    @Override
-    public double cost() {
-        return 10;
-    }
-
-    @Override
-    public String description() {
-        return "Simple Coffee";
-    }
-}
-
-abstract class CoffeeDecorator implements Coffee {
-    protected final Coffee coffee;
-
-    public CoffeeDecorator(Coffee coffee) {
-        this.coffee = coffee;
-    }
-}
-
-class MilkDecorator extends CoffeeDecorator {
-    public MilkDecorator(Coffee coffee) {
-        super(coffee);
-    }
-
-    @Override
-    public double cost() {
-        return coffee.cost() + 2;
-    }
-
-    @Override
-    public String description() {
-        return coffee.description() + " + Milk";
-    }
-}
-
-class SugarDecorator extends CoffeeDecorator {
-    public SugarDecorator(Coffee coffee) {
-        super(coffee);
-    }
-
-    @Override
-    public double cost() {
-        return coffee.cost() + 1;
-    }
-
-    @Override
-    public String description() {
-        return coffee.description() + " + Sugar";
-    }
-}
-
-// 使用
-Coffee coffee = new SimpleCoffee();
-coffee = new MilkDecorator(coffee);
-coffee = new SugarDecorator(coffee);
-System.out.println(coffee.description() + ": $" + coffee.cost());
-// Simple Coffee + Milk + Sugar: $13
-```
-
-### 3. 代理模式
-
-```java
-interface Subject {
-    void request();
-}
-
-class RealSubject implements Subject {
-    @Override
-    public void request() {
-        System.out.println("Real request");
-    }
-}
-
-class Proxy implements Subject {
-    private RealSubject realSubject;
-
-    @Override
-    public void request() {
-        if (realSubject == null) {
-            realSubject = new RealSubject();
-        }
-        preRequest();
-        realSubject.request();
-        postRequest();
-    }
-
-    private void preRequest() {
-        System.out.println("Pre-processing");
-    }
-
-    private void postRequest() {
-        System.out.println("Post-processing");
-    }
-}
-
-// 动态代理
-class DynamicProxyHandler implements InvocationHandler {
-    private final Object target;
-
-    public DynamicProxyHandler(Object target) {
-        this.target = target;
-    }
-
-    @Override
-    public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
-        System.out.println("Before: " + method.getName());
-        Object result = method.invoke(target, args);
-        System.out.println("After: " + method.getName());
-        return result;
-    }
-}
-
-// 使用动态代理
-Subject proxy = (Subject) Proxy.newProxyInstance(
-    RealSubject.class.getClassLoader(),
-    new Class<?>[]{Subject.class},
-    new DynamicProxyHandler(new RealSubject())
-);
-proxy.request();
-```
-
-### 4. 策略模式
-
-```java
-interface Strategy {
-    int execute(int a, int b);
-}
-
-class AddStrategy implements Strategy {
-    @Override
-    public int execute(int a, int b) {
-        return a + b;
-    }
-}
-
-class SubtractStrategy implements Strategy {
-    @Override
-    public int execute(int a, int b) {
-        return a - b;
-    }
-}
-
-class Context {
-    private Strategy strategy;
-
-    public void setStrategy(Strategy strategy) {
-        this.strategy = strategy;
-    }
-
-    public int execute(int a, int b) {
-        return strategy.execute(a, b);
-    }
-}
-
-// 使用
-Context context = new Context();
-context.setStrategy(new AddStrategy());
-System.out.println(context.execute(5, 3));  // 8
-
-context.setStrategy(new SubtractStrategy());
-System.out.println(context.execute(5, 3));  // 2
-```
+| 模式 | 一句话 | 适用场景 |
+|------|--------|---------|
+| [适配器](design-patterns/adapter.md) | 让不兼容的接口协同工作 | 第三方 SDK 接入 |
+| [桥接](design-patterns/bridge.md) | 抽象和实现分离，独立变化 | 多维度组合 |
+| [组合](design-patterns/composite.md) | 单个对象和组合对象统一对待 | 文件系统、组织架构 |
+| [装饰器](design-patterns/decorator.md) | 动态添加额外功能 | Java IO、日志增强 |
+| [外观](design-patterns/facade.md) | 简化复杂子系统的接口 | JdbcTemplate |
+| [代理](design-patterns/proxy.md) | 控制对对象的访问 | AOP、延迟加载 |
+| [享元](design-patterns/flyweight.md) | 共享对象减少内存 | 连接池、String 常量池 |
 
 ## 行为型模式
 
-### 1. 观察者模式
+> 关注"对象之间怎么协作"，分配职责。
 
-```java
-interface Observer {
-    void update(String message);
-}
+| 模式 | 一句话 | 适用场景 |
+|------|--------|---------|
+| [策略](design-patterns/strategy.md) | 算法可替换 | 支付方式、排序 |
+| [观察者](design-patterns/observer.md) | 一对多通知 | Spring 事件、MQ |
+| [模板方法](design-patterns/template-method.md) | 固定骨架，灵活步骤 | JdbcTemplate |
+| [责任链](design-patterns/chain-of-responsibility.md) | 请求沿链传递 | 过滤器链、审批流 |
+| [命令](design-patterns/command.md) | 请求封装成对象 | 撤销/重做 |
+| [状态](design-patterns/state.md) | 行为随状态变化 | 订单状态机 |
+| [迭代器](design-patterns/iterator.md) | 顺序访问集合元素 | Java Iterator |
+| [中介者](design-patterns/mediator.md) | 集中管理对象交互 | 聊天室、塔台 |
+| [备忘录](design-patterns/memento.md) | 保存和恢复状态 | 撤销、存档 |
+| [访问者](design-patterns/visitor.md) | 不改类结构定义新操作 | 编译器语法树 |
+| [解释器](design-patterns/interpreter.md) | 定义语法规则并解释执行 | 正则、SpEL |
 
-interface Subject {
-    void attach(Observer observer);
-    void detach(Observer observer);
-    void notifyObservers();
-}
+## 面试高频题
 
-class ConcreteSubject implements Subject {
-    private final List<Observer> observers = new ArrayList<>();
-    private String state;
+**Q1：简单工厂、工厂方法、抽象工厂的区别？**
 
-    @Override
-    public void attach(Observer observer) {
-        observers.add(observer);
-    }
+简单工厂：一个工厂类用 switch/if-else 创建不同产品（违反开闭原则）。工厂方法：每个产品一个工厂类，通过接口定义工厂方法（符合开闭原则）。抽象工厂：一组相关产品（如 Button + Checkbox）对应一个工厂，切换工厂就切换整套产品。
 
-    @Override
-    public void detach(Observer observer) {
-        observers.remove(observer);
-    }
+**Q2：装饰器 vs 代理 vs 适配器？**
 
-    @Override
-    public void notifyObservers() {
-        for (Observer observer : observers) {
-            observer.update(state);
-        }
-    }
+装饰器：增强功能，调用者知道有包装（如咖啡加奶）。代理：控制访问，调用者不知道有代理（如 AOP）。适配器：接口转换，让不兼容的接口协同工作。
 
-    public void setState(String state) {
-        this.state = state;
-        notifyObservers();
-    }
-}
+**Q3：策略 vs 状态？**
 
-class ConcreteObserver implements Observer {
-    private final String name;
+策略：调用方**主动选择**策略（如选择支付方式）。状态：状态**自动切换**，不同状态下行为不同（如订单状态机）。
 
-    public ConcreteObserver(String name) {
-        this.name = name;
-    }
+**Q4：Spring 中用到了哪些设计模式？**
 
-    @Override
-    public void update(String message) {
-        System.out.println(name + " received: " + message);
-    }
-}
-```
+单例（Bean）、工厂（BeanFactory）、代理（AOP）、模板方法（JdbcTemplate）、观察者（Event）、适配器（HandlerAdapter）、责任链（FilterChain）、装饰器（BeanWrapper）。
 
-### 2. 模板方法模式
+## 延伸阅读
 
-```java
-abstract class DataProcessor {
-    // 模板方法
-    public final void process() {
-        loadData();
-        if (validate()) {
-            processData();
-            saveData();
-        }
-    }
-
-    protected abstract void loadData();
-    protected abstract void processData();
-    protected abstract void saveData();
-
-    // 钩子方法
-    protected boolean validate() {
-        return true;
-    }
-}
-
-class CsvProcessor extends DataProcessor {
-    @Override
-    protected void loadData() {
-        System.out.println("Loading CSV data");
-    }
-
-    @Override
-    protected void processData() {
-        System.out.println("Processing CSV data");
-    }
-
-    @Override
-    protected void saveData() {
-        System.out.println("Saving CSV data");
-    }
-}
-```
-
-### 3. 责任链模式
-
-```java
-abstract class Handler {
-    protected Handler next;
-
-    public Handler setNext(Handler next) {
-        this.next = next;
-        return next;
-    }
-
-    public abstract void handle(Request request);
-}
-
-class AuthHandler extends Handler {
-    @Override
-    public void handle(Request request) {
-        if (request.isAuthenticated()) {
-            System.out.println("Authentication passed");
-            if (next != null) {
-                next.handle(request);
-            }
-        } else {
-            System.out.println("Authentication failed");
-        }
-    }
-}
-
-class AuthzHandler extends Handler {
-    @Override
-    public void handle(Request request) {
-        if (request.isAuthorized()) {
-            System.out.println("Authorization passed");
-            if (next != null) {
-                next.handle(request);
-            }
-        } else {
-            System.out.println("Authorization failed");
-        }
-    }
-}
-
-// 使用
-Handler auth = new AuthHandler();
-Handler authz = new AuthzHandler();
-auth.setNext(authz);
-auth.handle(request);
-```
-
-## 设计模式速查表
-
-| 模式 | 类型 | 用途 |
-|------|------|------|
-| 单例 | 创建型 | 全局唯一实例 |
-| 工厂 | 创建型 | 创建对象 |
-| 建造者 | 创建型 | 复杂对象构建 |
-| 原型 | 创建型 | 对象复制 |
-| 适配器 | 结构型 | 接口转换 |
-| 装饰器 | 结构型 | 动态添加功能 |
-| 代理 | 结构型 | 控制访问 |
-| 策略 | 行为型 | 算法切换 |
-| 观察者 | 行为型 | 事件通知 |
-| 模板方法 | 行为型 | 算法骨架 |
-| 责任链 | 行为型 | 请求处理链 |
-
-## 小结
-
-设计模式是软件设计的最佳实践，但不应过度使用：
-
-1. **理解问题**：先理解问题，再选择模式
-2. **适度使用**：不要为了模式而模式
-3. **组合使用**：多种模式可以组合
-4. **持续学习**：在实践中加深理解
+- 上一篇：[GC 垃圾回收](gc.md)
+- 下一篇：[性能调优](tuning.md)
+- [Spring AOP](../spring/aop.md) — 代理模式的实际应用
+- [Spring IOC](../spring/ioc.md) — 工厂模式、单例模式在 Spring 中的应用

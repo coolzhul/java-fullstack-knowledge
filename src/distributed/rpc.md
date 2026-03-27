@@ -3,206 +3,97 @@ title: RPC框架
 icon: connection
 order: 2
 category:
-  - 分布式
+  - 分布式技术
 tag:
   - RPC
-  - Dubbo
   - gRPC
+  - Dubbo
 ---
 
-# RPC框架
+# RPC 框架
 
-RPC（Remote Procedure Call）远程过程调用，像调用本地方法一样调用远程服务。
+> RPC（Remote Procedure Call，远程过程调用）让调用远程服务像调用本地方法一样简单。你不需要关心网络通信、序列化、负载均衡——框架帮你做了。这篇文章讲清楚 RPC 的核心原理和主流选型。
 
-## RPC原理
+## 基础入门：RPC 是什么？
 
-```
-┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
-│  Client  │ ──→ │  Stub    │ ──→ │  Network │ ──→ │  Server  │
-│          │     │  代理    │     │          │     │          │
-└──────────┘     └──────────┘     └──────────┘     └──────────┘
-                      ↓                                   ↓
-                 序列化请求                          反序列化
-                 发送网络                           调用服务
-```
-
-## Dubbo
-
-### 架构
+### 为什么需要 RPC？
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      Dubbo架构                               │
-├─────────────────────────────────────────────────────────────┤
-│  Provider ←→ Registry ←→ Consumer                           │
-│      ↓            ↓           ↓                             │
-│  Container    Monitor    Container                          │
-└─────────────────────────────────────────────────────────────┘
+服务 A 要调用服务 B 的方法：
+1. HTTP REST：发 HTTP 请求 → 性能有损耗（JSON 序列化、HTTP 头部大）
+2. RPC：像调用本地方法一样调用远程方法 → 性能好（二进制协议、高效序列化）
 ```
 
-### Spring Boot集成
+### RPC vs HTTP REST
 
-```xml
-<dependency>
-    <groupId>org.apache.dubbo</groupId>
-    <artifactId>dubbo-spring-boot-starter</artifactId>
-</dependency>
-<dependency>
-    <groupId>org.apache.dubbo</groupId>
-    <artifactId>dubbo-registry-nacos</artifactId>
-</dependency>
+| 维度 | HTTP REST | RPC (gRPC) |
+|------|-----------|------------|
+| 协议 | HTTP/1.1 | HTTP/2 |
+| 序列化 | JSON（可读但慢） | Protobuf（快但不可读） |
+| 接口定义 | 无（靠文档） | Proto 文件（强类型） |
+| 适用场景 | 对外 API | 服务间调用 |
+
+---
+
+
+## RPC vs HTTP
+
+```
+HTTP：
+  - 通用协议，跨语言
+  - 报文头大（几百字节），冗余信息多
+  - 通常用 JSON 序列化（可读性好但体积大）
+  - 适合：对外 API、与前端/第三方对接
+
+RPC（如 gRPC）：
+  - 二进制协议，报文小
+  - 通常用 Protobuf 序列化（体积小、解析快）
+  - 有服务发现、负载均衡、熔断等微服务特性
+  - 适合：服务间内部调用
 ```
 
-```yaml
-dubbo:
-  application:
-    name: user-service
-  registry:
-    address: nacos://localhost:8848
-  protocol:
-    name: dubbo
-    port: 20880
+## RPC 的核心流程
+
+```
+1. 服务注册：服务启动时注册到注册中心（Nacos）
+2. 服务发现：消费者从注册中心获取提供者列表
+3. 负载均衡：选择一个提供者实例
+4. 序列化：将请求参数序列化为二进制
+5. 网络传输：通过 TCP 发送给提供者
+6. 反序列化：提供者反序列化请求，执行方法
+7. 序列化结果 → 网络传输 → 消费者反序列化
 ```
 
-```java
-// 服务接口
-public interface UserService {
-    User getById(Long id);
-}
+## 主流选型
 
-// 服务提供者
-@DubboService
-public class UserServiceImpl implements UserService {
-    @Override
-    public User getById(Long id) {
-        return userDao.findById(id);
-    }
-}
+```
+gRPC（Google）：
+  - 基于 HTTP/2（多路复用、头部压缩、双向流）
+  - Protobuf 序列化（体积小、速度快）
+  - 跨语言（Proto 文件生成各语言代码）
+  - 推荐场景：微服务间调用
 
-// 服务消费者
-@Service
-public class OrderService {
-    @DubboReference
-    private UserService userService;
+Dubbo（阿里）：
+  - Java 生态，与 Spring 深度集成
+  - 丰富的服务治理功能（路由、降级、灰度）
+  - 社区活跃，国内使用广泛
+  - 推荐场景：Java 微服务
 
-    public Order createOrder(Long userId) {
-        User user = userService.getById(userId);
-        // ...
-    }
-}
+OpenFeign（Spring Cloud）：
+  - 声明式 HTTP 客户端
+  - 使用简单，学习成本低
+  - 性能不如 gRPC（HTTP + JSON）
+  - 推荐场景：小项目、对性能要求不高
 ```
 
-### 负载均衡
+## 面试高频题
 
-| 策略 | 说明 |
-|------|------|
-| random | 随机（默认） |
-| roundrobin | 轮询 |
-| leastactive | 最少活跃调用数 |
-| consistenthash | 一致性哈希 |
+**Q1：gRPC 为什么比 HTTP/1.1 快？**
 
-```java
-@DubboReference(loadbalance = "roundrobin")
-private UserService userService;
-```
+HTTP/2 的多路复用（一个 TCP 连接可以并行多个请求/响应）消除了队头阻塞。头部压缩（HPACK）减少了重复头部的传输。Protobuf 二进制序列化比 JSON 体积小 3-10 倍，解析快 20-100 倍。
 
-### 集群容错
+## 延伸阅读
 
-| 模式 | 说明 |
-|------|------|
-| Failover | 失败重试（默认） |
-| Failfast | 快速失败 |
-| Failsafe | 失败安全，忽略异常 |
-| Failback | 失败自动恢复 |
-| Forking | 并行调用 |
-
-## gRPC
-
-### 定义Proto
-
-```protobuf
-// user.proto
-syntax = "proto3";
-
-package com.example;
-
-service UserService {
-    rpc GetUser (GetUserRequest) returns (GetUserResponse);
-}
-
-message GetUserRequest {
-    int64 id = 1;
-}
-
-message GetUserResponse {
-    int64 id = 1;
-    string name = 2;
-    int32 age = 3;
-}
-```
-
-### Spring Boot集成
-
-```xml
-<dependency>
-    <groupId>net.devh</groupId>
-    <artifactId>grpc-server-spring-boot-starter</artifactId>
-</dependency>
-<dependency>
-    <groupId>net.devh</groupId>
-    <artifactId>grpc-client-spring-boot-starter</artifactId>
-</dependency>
-```
-
-```java
-// 服务端
-@GrpcService
-public class UserServiceImpl extends UserServiceGrpc.UserServiceImplBase {
-    @Override
-    public void getUser(GetUserRequest request,
-            StreamObserver<GetUserResponse> responseObserver) {
-        GetUserResponse response = GetUserResponse.newBuilder()
-            .setId(request.getId())
-            .setName("张三")
-            .setAge(25)
-            .build();
-        responseObserver.onNext(response);
-        responseObserver.onCompleted();
-    }
-}
-
-// 客户端
-@Service
-@RequiredArgsConstructor
-public class UserClient {
-    @GrpcClient("user-service")
-    private UserServiceGrpc.UserServiceBlockingStub userStub;
-
-    public User getUser(Long id) {
-        GetUserResponse response = userStub.getUser(
-            GetUserRequest.newBuilder().setId(id).build()
-        );
-        return new User(response.getId(), response.getName(), response.getAge());
-    }
-}
-```
-
-## 序列化
-
-| 方式 | 性能 | 体积 | 跨语言 |
-|------|------|------|--------|
-| Java原生 | 低 | 大 | 仅Java |
-| JSON | 中 | 大 | 是 |
-| Protobuf | 高 | 小 | 是 |
-| Hessian2 | 中 | 中 | 是 |
-| Kryo | 高 | 小 | 仅Java |
-
-## 小结
-
-| 特性 | 说明 |
-|------|------|
-| 透明调用 | 像本地方法一样调用远程服务 |
-| 序列化 | 对象与字节序列转换 |
-| 网络传输 | TCP/HTTP协议 |
-| 负载均衡 | 多服务实例分发 |
-| 容错 | 服务调用失败处理 |
+- 上一篇：[消息队列](mq.md) — RocketMQ/Kafka
+- 下一篇：[分布式事务](transaction.md) — Seata、TCC、Saga
+- [微服务架构](../architecture/microservice.md) — 服务拆分、服务治理

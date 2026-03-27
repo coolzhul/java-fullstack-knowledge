@@ -3,7 +3,7 @@ title: Git
 icon: git
 order: 2
 category:
-  - 工具
+  - 开发工具
 tag:
   - Git
   - 版本控制
@@ -11,243 +11,107 @@ tag:
 
 # Git
 
-Git是分布式版本控制系统，是现代开发必备工具。
+> Git 是每个开发者的吃饭工具。但多数人只会 `add`、`commit`、`push`。遇到冲突不会解决，回滚操作不敢执行，分支管理一团糟。这篇文章覆盖 Git 在实际开发中最核心的使用场景。
 
-## 基本配置
+## 基础入门：Git 5 分钟上手
 
-```bash
-# 配置用户信息
-git config --global user.name "Your Name"
-git config --global user.email "your@email.com"
+### 什么是 Git？
 
-# 配置编辑器
-git config --global core.editor vim
-
-# 配置别名
-git config --global alias.st status
-git config --global alias.co checkout
-git config --global alias.br branch
-git config --global alias.ci commit
-git config --global alias.lg "log --oneline --graph --all"
-
-# 查看配置
-git config --list
+```
+Git 是分布式版本控制系统：
+- 每个开发者本地都有完整的代码仓库
+- 可以离线工作
+- 分支操作非常快（不需要联网）
 ```
 
-## 基本命令
+### 工作流程
 
-### 初始化和克隆
-
-```bash
-# 初始化仓库
-git init
-
-# 克隆仓库
-git clone https://github.com/user/repo.git
-git clone git@github.com:user/repo.git
+```
+工作区 → add → 暂存区 → commit → 本地仓库 → push → 远程仓库
 ```
 
-### 日常工作流
+### 日常命令
 
 ```bash
-# 查看状态
-git status
+git init                      # 初始化仓库
+git clone <url>               # 克隆远程仓库
+git add .                     # 暂存所有修改
+git commit -m "feat: xxx"     # 提交
+git push origin main          # 推送到远程
+git pull origin main          # 拉取远程更新
+git branch feature/login      # 创建分支
+git checkout feature/login    # 切换分支
+git merge feature/login       # 合并分支
+```
 
-# 添加到暂存区
-git add file.txt
-git add .
-git add -p  # 交互式添加
+---
 
-# 提交
-git commit -m "feat: add new feature"
-git commit -am "fix: bug fix"  # 添加并提交
+
+## 核心概念——一张图
+
+```
+工作区（Working Directory）→ add → 暂存区（Staging Area）→ commit → 本地仓库（.git）→ push → 远程仓库
+
+git add    ：把修改从工作区放到暂存区
+git commit ：把暂存区的修改提交到本地仓库
+git push   ：把本地仓库推送到远程仓库
+git pull   ：拉取远程更新并合并到当前分支
+git fetch  ：只拉取远程更新，不合并
+```
+
+## 必会操作
+
+```bash
+# 撤销操作（小心使用）
+git checkout -- file        # 撤销工作区的修改（未 add）
+git reset HEAD file         # 撤销暂存区（已 add，未 commit）
+git reset --soft HEAD~1     # 撤销最近一次 commit（保留修改）
+git reset --hard HEAD~1     # 撤销最近一次 commit（丢弃修改，危险！）
+git revert HEAD             # 创建一个新 commit 来撤销上一次 commit（安全）
+
+# 分支管理
+git branch feature/login    # 创建分支
+git checkout feature/login  # 切换分支
+git checkout -b feature/login  # 创建并切换（二合一）
+git merge feature/login     # 合并分支到当前分支
+git branch -d feature/login # 删除已合并的分支
+
+# 暂存工作区
+git stash                   # 暂存当前修改
+git stash pop               # 恢复暂存并删除记录
+git stash list              # 查看暂存列表
 
 # 查看历史
-git log
-git log --oneline
-git log --oneline --graph
-git log -p file.txt  # 文件修改历史
-
-# 查看差异
-git diff              # 工作区 vs 暂存区
-git diff --cached     # 暂存区 vs 最新提交
-git diff HEAD~1       # 当前 vs 上一次提交
+git log --oneline --graph   # 图形化查看提交历史
+git diff                    # 查看工作区与暂存区的差异
+git diff --staged           # 查看暂存区与仓库的差异
 ```
 
-### 分支操作
-
-```bash
-# 查看分支
-git branch            # 本地分支
-git branch -r         # 远程分支
-git branch -a         # 所有分支
-
-# 创建分支
-git branch feature    # 创建
-git checkout -b feature  # 创建并切换
-git switch -c feature    # 新语法
-
-# 切换分支
-git checkout main
-git switch main
-
-# 合并分支
-git merge feature
-git merge --no-ff feature  # 禁用快进
-
-# 删除分支
-git branch -d feature
-git branch -D feature  # 强制删除
-
-# 重命名分支
-git branch -m old-name new-name
-```
-
-### 远程操作
-
-```bash
-# 查看远程仓库
-git remote -v
-
-# 添加远程仓库
-git remote add origin https://github.com/user/repo.git
-
-# 拉取
-git fetch origin
-git pull origin main
-
-# 推送
-git push origin main
-git push -u origin main  # 设置上游
-git push --force origin main  # 强制推送（谨慎使用）
-
-# 删除远程分支
-git push origin --delete feature
-```
-
-## 撤销操作
-
-```bash
-# 撤销工作区修改
-git checkout -- file.txt
-git restore file.txt
-
-# 撤销暂存
-git reset HEAD file.txt
-git restore --staged file.txt
-
-# 撤销提交（保留修改）
-git reset --soft HEAD~1
-
-# 撤销提交（丢弃修改）
-git reset --hard HEAD~1
-
-# 修改最后一次提交
-git commit --amend -m "new message"
-
-# 使用stash暂存
-git stash
-git stash list
-git stash pop
-git stash apply stash@{0}
-```
-
-## 标签管理
-
-```bash
-# 创建标签
-git tag v1.0.0
-git tag -a v1.0.0 -m "Release 1.0.0"
-
-# 查看标签
-git tag
-git show v1.0.0
-
-# 推送标签
-git push origin v1.0.0
-git push origin --tags
-
-# 删除标签
-git tag -d v1.0.0
-git push origin --delete v1.0.0
-```
-
-## Git Flow
+## 分支策略
 
 ```
-main (master)
-  │
-  ├─── develop
-  │      │
-  │      ├─── feature/xxx
-  │      │
-  │      ├─── release/x.x.x
-  │      │
-  │      └─── hotfix/xxx
-  │
-  └───────────────────────────→
+main（生产）：稳定的发布版本
+develop（开发）：最新的开发代码
+feature/*（功能）：每个功能一个分支
+hotfix/*（修复）：紧急修复
+release/*（发布）：发布前的准备
+
+Git Flow（适合大团队）：
+  main → release/* → hotfix/*
+  develop → feature/* → develop → release/*
+
+GitHub Flow（适合小团队）：
+  main ← feature/*（PR/MR 合并）
+  简单高效，推荐
 ```
 
-```bash
-# 初始化Git Flow
-git flow init
+## 面试高频题
 
-# 开始新功能
-git flow feature start login
+**Q1：`git merge` 和 `git rebase` 的区别？**
 
-# 完成功能
-git flow feature finish login
+`merge`：创建一个合并提交，保留两个分支的完整历史。`rebase`：将当前分支的提交"变基"到目标分支上，历史线性但改写了提交。团队协作推荐 `merge`（安全、不改变历史），个人分支整理可以用 `rebase`（历史更清晰）。
 
-# 开始发布
-git flow release start 1.0.0
+## 延伸阅读
 
-# 完成发布
-git flow release finish 1.0.0
-
-# 紧急修复
-git flow hotfix start bug-xxx
-git flow hotfix finish bug-xxx
-```
-
-## 提交规范
-
-```
-<type>(<scope>): <subject>
-
-<body>
-
-<footer>
-```
-
-**Type类型**：
-- `feat`: 新功能
-- `fix`: 修复bug
-- `docs`: 文档更新
-- `style`: 代码格式
-- `refactor`: 重构
-- `test`: 测试
-- `chore`: 构建/工具
-
-**示例**：
-```
-feat(auth): add JWT authentication
-
-- Implement JWT token generation
-- Add token validation filter
-- Update login endpoint
-
-Closes #123
-```
-
-## 小结
-
-| 操作 | 命令 |
-|------|------|
-| 克隆 | git clone |
-| 添加 | git add |
-| 提交 | git commit |
-| 推送 | git push |
-| 拉取 | git pull |
-| 分支 | git branch |
-| 合并 | git merge |
-| 撤销 | git reset/restore |
+- 上一篇：[Docker](docker.md) — 容器化部署
+- 下一篇：[Maven](maven.md) — 依赖管理、构建

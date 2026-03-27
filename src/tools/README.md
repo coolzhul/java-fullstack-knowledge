@@ -1,6 +1,6 @@
 ---
 title: 开发工具
-icon: tool
+icon: mdi:tools
 order: 6
 category:
   - 工具

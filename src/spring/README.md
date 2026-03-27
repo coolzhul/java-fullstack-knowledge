@@ -1,6 +1,6 @@
 ---
 title: Spring生态
-icon: leaf
+icon: mdi:leaf
 order: 3
 category:
   - Spring

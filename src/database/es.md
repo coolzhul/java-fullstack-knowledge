@@ -7,358 +7,146 @@ category:
 tag:
   - Elasticsearch
   - 搜索
+  - ELK
 ---
 
 # Elasticsearch
 
-Elasticsearch是分布式搜索和分析引擎，基于Lucene构建。
+> Elasticsearch（ES）不是数据库的替代品，而是解决"搜索"和"分析"问题的专用工具。全文搜索、日志分析、指标聚合——这些是 MySQL 做不好或不该做的事情。这篇文章帮你理解 ES 的核心概念和实战用法。
+
+## 基础入门：Elasticsearch 是什么？
+
+### 为什么不用 MySQL 做搜索？
+
+```
+MySQL LIKE '%关键词%':
+- 全表扫描 → 慢
+- 不支持分词（"Java开发工程师" 搜 "Java" 搜不到）
+- 不支持相关性排序
+- 百万级数据基本不可用
+
+Elasticsearch:
+- 倒排索引 → 毫秒级搜索
+- 内置分词器 → 支持中文分词
+- 相关性评分 → 匹配度高的排前面
+- 分布式 → 天然支持水平扩展
+```
+
+### 基本概念
+
+```
+MySQL          →  Elasticsearch
+数据库         →  索引（Index）
+表             →  索引（Index）
+行             →  文档（Document）
+列             →  字段（Field）
+```
+
+---
+
+
+## 为什么 MySQL 做搜索不好？
+
+```
+MySQL 的 LIKE '%关键词%' 问题：
+  - 无法使用索引 → 全表扫描 → 慢
+  - 不支持分词（"Java开发工程师" 搜 "Java" 搜不到）
+  - 不支持相关性排序（匹配度高的排在前面）
+  - 数据量大时（百万级）基本不可用
+
+ES 的优势：
+  - 倒排索引（Inverted Index）→ 毫秒级全文搜索
+  - 分词器 → 支持中文分词、同义词、拼音搜索
+  - 相关性评分 → 匹配度高的自然排在前面
+  - 分布式架构 → 天然支持水平扩展
+```
 
 ## 核心概念
 
-| ES概念 | 关系型数据库类比 |
-|--------|------------------|
-| Index（索引） | Database |
-| Type（类型） | Table |
-| Document（文档） | Row |
-| Field（字段） | Column |
-| Mapping（映射） | Schema |
+```
+MySQL          →  Elasticsearch
+数据库(Database) →  索引(Index)
+表(Table)      →  类型(Type)（ES 7.x 后废弃，一个 Index 就是一种类型）
+行(Row)        →  文档(Document)
+列(Column)     →  字段(Field)
+                →  映射(Mapping)（定义字段类型和分析规则）
+```
 
-## 索引操作
+### 倒排索引
 
-### 创建索引
+```
+文档1：Java 是最好的编程语言
+文档2：Python 编程也很棒
+文档3：Java 和 Python 都是好语言
+
+倒排索引：
+  Java    → [文档1, 文档3]
+  Python  → [文档2, 文档3]
+  编程    → [文档1, 文档2]
+  语言    → [文档1, 文档3]
+  棒      → [文档2]
+
+搜索 "Java 编程"：
+  Java  → [文档1, 文档3]
+  编程  → [文档1, 文档2]
+  交集  → [文档1]（且文档1 包含两个词，评分更高）
+```
+
+## 实战用法
 
 ```json
-PUT /products
+// 创建索引并定义映射
+PUT /articles
 {
-  "settings": {
-    "number_of_shards": 3,
-    "number_of_replicas": 1
-  },
   "mappings": {
     "properties": {
-      "title": {
-        "type": "text",
-        "analyzer": "ik_max_word"
-      },
-      "price": {
-        "type": "double"
-      },
-      "category": {
-        "type": "keyword"
-      },
-      "created_at": {
-        "type": "date"
-      }
-    }
-  }
-}
-```
-
-### 文档操作
-
-```json
-// 创建文档
-POST /products/_doc/1
-{
-  "title": "iPhone 15 Pro",
-  "price": 7999,
-  "category": "手机"
-}
-
-// 获取文档
-GET /products/_doc/1
-
-// 更新文档
-POST /products/_update/1
-{
-  "doc": {
-    "price": 7499
-  }
-}
-
-// 删除文档
-DELETE /products/_doc/1
-
-// 批量操作
-POST /_bulk
-{"index": {"_index": "products", "_id": 1}}
-{"title": "iPhone 15", "price": 5999}
-{"index": {"_index": "products", "_id": 2}}
-{"title": "MacBook Pro", "price": 14999}
-```
-
-## 查询DSL
-
-### 基本查询
-
-```json
-// 查询所有
-GET /products/_search
-{
-  "query": {
-    "match_all": {}
-  }
-}
-
-// 全文搜索
-GET /products/_search
-{
-  "query": {
-    "match": {
-      "title": "iPhone"
+      "title": { "type": "text", "analyzer": "ik_max_word" },
+      "content": { "type": "text", "analyzer": "ik_max_word" },
+      "author": { "type": "keyword" },
+      "publish_date": { "type": "date" },
+      "views": { "type": "integer" }
     }
   }
 }
 
-// 精确匹配
-GET /products/_search
-{
-  "query": {
-    "term": {
-      "category": "手机"
-    }
-  }
-}
-
-// 多字段搜索
-GET /products/_search
-{
-  "query": {
-    "multi_match": {
-      "query": "iPhone",
-      "fields": ["title", "description"]
-    }
-  }
-}
-```
-
-### 复合查询
-
-```json
-// bool查询
-GET /products/_search
+// 搜索
+GET /articles/_search
 {
   "query": {
     "bool": {
       "must": [
-        { "match": { "title": "iPhone" } }
-      ],
-      "must_not": [
-        { "term": { "status": "deleted" } }
-      ],
-      "should": [
-        { "term": { "featured": true } }
+        { "match": { "title": "Java" } }
       ],
       "filter": [
-        { "range": { "price": { "lte": 10000 } } }
+        { "range": { "publish_date": { "gte": "2024-01-01" } } }
       ]
     }
-  }
-}
-
-// 范围查询
-GET /products/_search
-{
-  "query": {
-    "range": {
-      "price": {
-        "gte": 1000,
-        "lte": 5000
-      }
-    }
-  }
-}
-```
-
-### 聚合查询
-
-```json
-// 统计聚合
-GET /products/_search
-{
-  "size": 0,
-  "aggs": {
-    "avg_price": {
-      "avg": { "field": "price" }
-    },
-    "max_price": {
-      "max": { "field": "price" }
-    },
-    "categories": {
-      "terms": { "field": "category" }
-    }
-  }
-}
-
-// 嵌套聚合
-GET /products/_search
-{
-  "size": 0,
-  "aggs": {
-    "categories": {
-      "terms": { "field": "category" },
-      "aggs": {
-        "avg_price": {
-          "avg": { "field": "price" }
-        }
-      }
-    }
-  }
-}
-```
-
-## 分页与排序
-
-```json
-// 分页
-GET /products/_search
-{
-  "from": 0,
-  "size": 10,
-  "query": {
-    "match_all": {}
-  }
-}
-
-// 排序
-GET /products/_search
-{
-  "sort": [
-    { "price": "desc" },
-    { "_score": "desc" }
-  ],
-  "query": {
-    "match_all": {}
-  }
-}
-
-// 高亮
-GET /products/_search
-{
-  "query": {
-    "match": { "title": "iPhone" }
   },
-  "highlight": {
-    "fields": {
-      "title": {}
-    },
-    "pre_tags": ["<em>"],
-    "post_tags": ["</em>"]
-  }
+  "sort": [
+    { "views": { "order": "desc" } },
+    "_score"
+  ],
+  "from": 0,
+  "size": 10
 }
 ```
 
-## Java客户端
+::: tip ES 与 MySQL 数据同步
+不要在业务代码中同时写 MySQL 和 ES（耦合太强，写入延迟翻倍）。推荐：1) Canal 监听 MySQL binlog 异步同步到 ES；2) Logstash 定时增量同步；3) 应用层双写 + MQ 异步消费写 ES。
+:::
 
-### 依赖
+## 面试高频题
 
-```xml
-<dependency>
-    <groupId>co.elastic.clients</groupId>
-    <artifactId>elasticsearch-java</artifactId>
-    <version>8.11.0</version>
-</dependency>
-```
+**Q1：ES 为什么搜索快？**
 
-### 配置
+倒排索引 + 分词 + 分布式。倒排索引让搜索变成"查字典"，O(1) 或 O(log n) 找到包含关键词的文档。分布式让查询在多个分片上并行执行。聚合分析则是利用列式存储的优势。
 
-```java
-@Configuration
-public class ElasticsearchConfig {
+**Q2：ES 的深度分页问题怎么解决？**
 
-    @Bean
-    public ElasticsearchClient elasticsearchClient() {
-        RestClient restClient = RestClient.builder(
-            HttpHost.create("http://localhost:9200")
-        ).build();
+`from + size` 在 ES 中如果 `from` 很大（如 10000），每个分片都要返回 `from + size` 条数据给协调节点再排序截取——非常浪费。解决方案：1) `scroll`（游标，适合大批量导出）；2) `search_after`（基于排序值的翻页，推荐）；3) 限制最大页码（产品层面，如最多 100 页）。
 
-        ElasticsearchTransport transport = new RestClientTransport(
-            restClient, new JacksonJsonpMapper()
-        );
+## 延伸阅读
 
-        return new ElasticsearchClient(transport);
-    }
-}
-```
-
-### 使用示例
-
-```java
-@Service
-@RequiredArgsConstructor
-public class ProductService {
-
-    private final ElasticsearchClient client;
-
-    // 索引文档
-    public void indexProduct(Product product) throws IOException {
-        client.index(i -> i
-            .index("products")
-            .id(product.getId())
-            .document(product)
-        );
-    }
-
-    // 搜索
-    public List<Product> search(String keyword) throws IOException {
-        SearchResponse<Product> response = client.search(s -> s
-            .index("products")
-            .query(q -> q
-                .match(m -> m
-                    .field("title")
-                    .query(keyword)
-                )
-            ),
-            Product.class
-        );
-
-        return response.hits().hits().stream()
-            .map(Hit::source)
-            .collect(Collectors.toList());
-    }
-
-    // 复合查询
-    public List<Product> complexSearch(String keyword, double maxPrice) throws IOException {
-        SearchResponse<Product> response = client.search(s -> s
-            .index("products")
-            .query(q -> q
-                .bool(b -> b
-                    .must(m -> m.match(mt -> mt.field("title").query(keyword)))
-                    .filter(f -> f.range(r -> r.field("price").lte(JsonData.of(maxPrice))))
-                )
-            ),
-            Product.class
-        );
-
-        return response.hits().hits().stream()
-            .map(Hit::source)
-            .collect(Collectors.toList());
-    }
-}
-```
-
-## 集群架构
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Elasticsearch Cluster                     │
-├─────────────────────────────────────────────────────────────┤
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
-│  │   Node 1    │  │   Node 2    │  │      Node 3         │  │
-│  │  (Master)   │  │  (Data)     │  │    (Data)           │  │
-│  │             │  │             │  │                     │  │
-│  │  Shard 0    │  │  Shard 1    │  │    Shard 2          │  │
-│  │  Replica 1  │  │  Replica 0  │  │    Replica 0        │  │
-│  └─────────────┘  └─────────────┘  └─────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
-```
-
-## 小结
-
-| 特性 | 说明 |
-|------|------|
-| 倒排索引 | 快速全文搜索 |
-| 分片 | 数据水平分割 |
-| 副本 | 高可用 |
-| DSL | 查询语法 |
-| 聚合 | 统计分析 |
+- 上一篇：[Redis](redis.md) — 缓存实战、数据结构
+- [MySQL](mysql.md) — 索引、事务、MVCC
+- [消息队列](../distributed/mq.md) — RocketMQ/Kafka

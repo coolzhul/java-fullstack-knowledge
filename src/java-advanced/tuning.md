@@ -10,388 +10,200 @@ tag:
   - JVM
 ---
 
-# Java性能调优
+# Java 性能调优
 
-性能调优是Java开发中的重要技能，涉及JVM调优、代码优化、系统监控等多个方面。
+> 性能调优不是"把 JVM 参数调到极致"，而是"找到瓶颈，针对性解决"。80% 的性能问题来自代码层面（N+1 查询、大对象、锁竞争），而不是 JVM 参数。这篇文章从"怎么发现问题"到"怎么解决问题"，建立系统的调优方法论。
 
-## 性能指标
+## 调优方法论
 
-### 关键指标
+```
+1. 发现问题：监控告警、用户反馈、日志分析
+2. 定位瓶颈：是 CPU？内存？IO？网络？数据库？
+3. 分析原因：工具辅助（Arthas、jstack、jmap、GC 日志）
+4. 针对优化：改代码 > 改配置 > 改 JVM 参数
+5. 验证效果：压测对比，确保优化有效且没有副作用
 
-| 指标 | 说明 | 目标 |
-|------|------|------|
-| 响应时间 | 请求处理时间 | < 200ms |
-| 吞吐量 | 单位时间处理请求数 | 越高越好 |
-| 并发数 | 同时处理的请求数 | 根据业务定 |
-| 错误率 | 失败请求占比 | < 0.1% |
-| GC停顿 | GC造成的暂停时间 | < 100ms |
-| CPU使用率 | CPU占用比例 | < 80% |
-| 内存使用率 | 内存占用比例 | < 80% |
+核心原则：
+  - 先监控后优化（不要凭感觉）
+  - 先改代码后改参数（代码问题参数补不了）
+  - 不要过早优化（先让功能正确，再让功能快）
+  - 不要过度优化（维护成本可能超过收益）
+```
 
-## 性能监控工具
+## 常见性能问题排查
 
-### JDK工具
+### CPU 飙高
 
 ```bash
-# jps - 查看Java进程
-jps -l
-
-# jstat - 监控GC
-jstat -gc <pid> 1000  # 每秒输出GC信息
-jstat -gcutil <pid>   # GC统计信息
-
-# jinfo - 查看JVM参数
-jinfo -flags <pid>
-jinfo -flag MaxHeapSize <pid>
-
-# jmap - 内存映射
-jmap -heap <pid>           # 堆信息
-jmap -histo <pid>          # 对象统计
-jmap -dump:format=b,file=heap.hprof <pid>  # 堆转储
-
-# jstack - 线程栈
-jstack <pid>               # 线程栈信息
-jstack -l <pid>            # 包含锁信息
-
-# jcmd - 多功能工具
-jcmd <pid> VM.flags        # JVM参数
-jcmd <pid> GC.heap_info    # 堆信息
-jcmd <pid> Thread.print    # 线程栈
-```
-
-### 可视化工具
-
-```bash
-# JConsole
-jconsole
-
-# VisualVM
-jvisualvm
-
-# Java Mission Control (JMC)
-# 需要单独下载
-
-# Arthas - 阿里开源诊断工具
-java -jar arthas-boot.jar
-```
-
-### Arthas常用命令
-
-```bash
-# 查看仪表盘
-dashboard
-
-# 查看线程
-thread
-thread -n 5          # CPU占用最高的5个线程
-thread <thread-id>   # 线程详情
-
-# 查看方法执行时间
-trace com.example.Service method
-
-# 监控方法调用
-monitor -c 5 com.example.Service method
-
-# 查看方法参数和返回值
-watch com.example.Service method "{params, returnObj}"
-
-# 反编译
-jad com.example.Service
-
-# 查看类信息
-sc -d com.example.Service
-
-# 查看方法信息
-sm -d com.example.Service method
-
-# 堆转储
-heapdump /tmp/dump.hprof
-```
-
-## JVM调优
-
-### 内存调优
-
-```bash
-# 堆内存
--Xms4g                    # 初始堆大小
--Xmx4g                    # 最大堆大小（与-Xms相同避免动态扩展）
--Xmn2g                    # 年轻代大小
--XX:NewRatio=2            # 老年代:年轻代 = 2:1
--XX:SurvivorRatio=8       # Eden:S0:S1 = 8:1:1
-
-# 元空间
--XX:MetaspaceSize=256m
--XX:MaxMetaspaceSize=512m
-
-# 栈内存
--Xss256k                  # 每个线程栈大小
-
-# 直接内存
--XX:MaxDirectMemorySize=1g
-```
-
-### GC调优
-
-```bash
-# 选择GC收集器
--XX:+UseG1GC              # G1（推荐）
--XX:+UseZGC               # ZGC（低延迟）
-
-# G1调优
--XX:MaxGCPauseMillis=200  # 目标停顿时间
--XX:G1HeapRegionSize=16m  # Region大小
--XX:InitiatingHeapOccupancyPercent=45  # 触发并发GC的堆占用率
-
-# 日志
--Xlog:gc*:file=gc.log:time,uptime,level,tags
-```
-
-### JIT调优
-
-```bash
-# 分层编译
--XX:+TieredCompilation    # 默认开启
-
-# 代码缓存
--XX:ReservedCodeCacheSize=256m
-
-# JIT阈值
--XX:CompileThreshold=10000  # 方法调用次数达到阈值后编译
-```
-
-## 代码层面优化
-
-### 字符串优化
-
-```java
-// 1. 字符串拼接
-// 不推荐
-String s = "";
-for (int i = 0; i < 1000; i++) {
-    s += i;  // 每次创建新对象
-}
-
-// 推荐
-StringBuilder sb = new StringBuilder();
-for (int i = 0; i < 1000; i++) {
-    sb.append(i);
-}
-String result = sb.toString();
-
-// 2. 字符串常量池
-// 推荐：使用intern()复用字符串
-String s1 = new String("hello").intern();
-String s2 = "hello";
-System.out.println(s1 == s2);  // true
-```
-
-### 集合优化
-
-```java
-// 1. 设置初始容量
-// 不推荐
-List<String> list = new ArrayList<>();  // 默认容量10，需要多次扩容
-
-// 推荐
-List<String> list = new ArrayList<>(1000);  // 预估容量
-
-// 2. 选择合适的集合
-// 随机访问：ArrayList
-// 频繁插入删除：LinkedList
-// 去重：HashSet
-// 排序：TreeSet
-// 键值对：HashMap
-
-// 3. HashMap初始容量
-Map<String, String> map = new HashMap<>(64);  // 避免扩容
-```
-
-### 并发优化
-
-```java
-// 1. 使用并发集合
-// 不推荐
-Map<String, String> map = Collections.synchronizedMap(new HashMap<>());
-
-// 推荐
-Map<String, String> map = new ConcurrentHashMap<>();
-
-// 2. 使用线程池
-// 不推荐
-new Thread(() -> doSomething()).start();
-
-// 推荐
-ExecutorService executor = Executors.newFixedThreadPool(10);
-executor.submit(() -> doSomething());
-
-// 3. 使用LongAdder代替AtomicLong
-// 高并发计数场景
-LongAdder counter = new LongAdder();
-counter.increment();
-```
-
-### IO优化
-
-```java
-// 1. 使用缓冲
-// 不推荐
-FileInputStream fis = new FileInputStream("file.txt");
-
-// 推荐
-BufferedInputStream bis = new BufferedInputStream(
-    new FileInputStream("file.txt")
-);
-
-// 2. 使用NIO
-// 大文件复制
-Files.copy(sourcePath, destPath, StandardCopyOption.REPLACE_EXISTING);
-
-// 3. 使用try-with-resources
-try (BufferedReader br = new BufferedReader(new FileReader("file.txt"))) {
-    // ...
-}
-```
-
-### 对象优化
-
-```java
-// 1. 避免创建不必要的对象
-// 不推荐
-String s = new String("hello");  // 创建两个对象
-
-// 推荐
-String s = "hello";  // 使用常量池
-
-// 2. 重用对象
-// 不推荐
-Boolean b = new Boolean(true);
-
-// 推荐
-Boolean b = Boolean.TRUE;
-
-// 3. 延迟初始化
-public class LazyInit {
-    private volatile ExpensiveObject instance;
-
-    public ExpensiveObject getInstance() {
-        if (instance == null) {
-            synchronized (this) {
-                if (instance == null) {
-                    instance = new ExpensiveObject();
-                }
-            }
-        }
-        return instance;
-    }
-}
-```
-
-## 数据库优化
-
-### 连接池配置
-
-```java
-// HikariCP配置（推荐）
-HikariConfig config = new HikariConfig();
-config.setJdbcUrl("jdbc:mysql://localhost:3306/db");
-config.setUsername("user");
-config.setPassword("password");
-config.setMaximumPoolSize(20);        // 最大连接数
-config.setMinimumIdle(5);             // 最小空闲连接
-config.setConnectionTimeout(30000);   // 连接超时
-config.setIdleTimeout(600000);        // 空闲超时
-config.setMaxLifetime(1800000);       // 连接最大生命周期
-```
-
-### SQL优化
-
-```sql
--- 1. 使用索引
-CREATE INDEX idx_user_name ON users(name);
-
--- 2. 避免SELECT *
-SELECT id, name FROM users WHERE id = 1;
-
--- 3. 使用EXPLAIN分析
-EXPLAIN SELECT * FROM users WHERE name = 'test';
-
--- 4. 批量操作
-INSERT INTO users (name, age) VALUES
-    ('a', 20),
-    ('b', 25),
-    ('c', 30);
-```
-
-## 常见问题排查
-
-### CPU飙高
-
-```bash
-# 1. 找到占用CPU高的进程
+# Step 1: 找到占用 CPU 最高的 Java 进程
 top
 
-# 2. 找到进程中的高CPU线程
+# Step 2: 找到进程中 CPU 最高的线程
 top -H -p <pid>
 
-# 3. 将线程ID转换为16进制
+# Step 3: 线程 ID 转 16 进制
 printf "%x\n" <thread-id>
 
-# 4. 查看线程栈
-jstack <pid> | grep <hex-thread-id> -A 30
+# Step 4: 查看线程栈
+jstack <pid> | grep <hex-id> -A 30
+
+# 常见原因：
+# - 死循环（业务逻辑 bug）
+# - 正则表达式回溯（如复杂的正则匹配超长字符串）
+# - GC 频繁（Minor GC + Full GC 交替，CPU 全在 GC）
+# - 加密计算（大量 SSL 握手、加密解密）
 ```
 
-### 内存溢出
+### 内存泄漏
 
 ```bash
-# 1. 生成堆转储
-jmap -dump:format=b,file=heap.hprof <pid>
+# Step 1: 看堆使用趋势（持续上升不下降 = 可能有泄漏）
+jstat -gcutil <pid> 5000  # 每 5 秒看一次
 
-# 2. 使用MAT或VisualVM分析
+# Step 2: 生成堆转储
+jmap -dump:format=b,file=/tmp/heap.hprof <pid>
+# 或 OOM 时自动生成（推荐加上这个参数）：
+# -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp/
 
-# 3. 查看大对象
-jmap -histo <pid> | head -20
+# Step 3: 用 MAT (Memory Analyzer Tool) 分析
+# 看 "Dominator Tree" 找到占用最大的对象
+# 看 "Leak Suspects" 自动分析可疑泄漏
+
+# 常见泄漏场景：
+# - ThreadLocal 忘记 remove（线程池中线程复用，ThreadLocal 不会自动清理）
+# - 静态集合不断添加不清理（如缓存没有淘汰策略）
+# - 监听器/回调没有注销
+# - 数据库连接/IO 流没有关闭
+# - 内部类持有外部类引用导致外部类无法回收
+```
+
+### 频繁 GC
+
+```bash
+# 分析 GC 日志
+-Xlog:gc*:file=gc.log:time,uptime,level,tags
+
+# 看什么？
+# 1. Full GC 频率 → 如果每小时好几次，要排查内存泄漏或堆太小
+# 2. Minor GC 耗时 → 如果每次 > 100ms，可能年轻代太大或对象太多
+# 3. 老年代占用趋势 → 持续接近阈值，说明对象晋升太快
+
+# 常见原因：
+# - 堆太小（-Xms = -Xmx，避免动态扩容带来的 Full GC）
+# - 大对象太多（大数组、大字符串直接进老年代）
+# - 内存泄漏（老年代被无用对象填满）
+# - 元空间不足（动态代理类太多）
 ```
 
 ### 死锁
 
 ```bash
-# 查看死锁
-jstack <pid> | grep -A 10 "deadlock"
+# Step 1: 查看死锁信息
+jstack <pid> | grep -A 20 "deadlock"
 
-# 或使用Arthas
+# 或用 Arthas
 thread -b
+
+# Step 2: 分析死锁链
+# 看清楚哪些线程在等哪些锁，形成循环等待
+
+# 预防方法：
+# - 锁的获取顺序一致（所有线程按固定顺序获取锁）
+# - 使用 tryLock(timeout) 设置超时
+# - 减小锁的粒度（锁尽量少的代码）
+# - 使用并发容器代替加锁
 ```
 
-### GC频繁
+## 代码层面的优化
+
+### Top 10 最常见的性能问题
+
+```java
+// 1. N+1 查询（最常见的性能杀手）
+// ❌ 查 100 个订单，每个订单查一次用户信息 = 101 次 SQL
+List<Order> orders = orderMapper.findAll();
+for (Order order : orders) {
+    User user = userMapper.findById(order.getUserId());  // N 次！
+}
+// ✅ 批量查询 = 2 次 SQL
+List<Long> userIds = orders.stream().map(Order::getUserId).toList();
+Map<Long, User> userMap = userMapper.findByIds(userIds);
+
+// 2. 大集合操作
+// ❌ 把 100 万条数据全部加载到内存
+List<Order> all = orderMapper.findAll();  // OOM 风险
+// ✅ 分页查询
+List<Order> page = orderMapper.findPage(pageNum, pageSize);
+
+// 3. String 拼接在循环中
+// ❌ 循环中用 + 拼接
+String s = "";
+for (int i = 0; i < 10000; i++) s += i;
+// ✅ 用 StringBuilder
+StringBuilder sb = new StringBuilder(10000 * 5);  // 预估大小
+for (int i = 0; i < 10000; i++) sb.append(i);
+
+// 4. ArrayList 没有初始容量（已多次提到）
+// 5. HashMap 没有初始容量
+Map<String, User> map = new HashMap<>(expectedSize * 4 / 3 + 1);  // 避免扩容
+
+// 6. 同步范围太大
+// ❌ 整个方法加 synchronized
+// ✅ 只锁必要的代码块
+
+// 7. 数据库连接未关闭
+// ❌ 获取连接后忘了 close
+// ✅ try-with-resources
+
+// 8. 不必要的序列化/反序列化
+// ❌ 频繁 JSON 序列化大对象
+// ✅ 只序列化需要的字段
+
+// 9. 过度使用反射
+// ❌ 高频调用路径上用反射
+// ✅ 缓存 Method 对象，或用 MethodHandle
+
+// 10. 日志级别不当
+// ❌ debug 级别的日志字符串拼接在生产环境
+log.debug("User: " + user + ", orders: " + orders);  // 字符串拼接了但日志不输出
+// ✅ 用参数化日志
+log.debug("User: {}, orders: {}", user, orders);  // 只有 debug 开启时才拼接
+```
+
+## JVM 参数——实战推荐
 
 ```bash
-# 1. 查看GC统计
-jstat -gcutil <pid> 1000
-
-# 2. 分析GC日志
-# 关注Full GC频率和耗时
-
-# 3. 解决方案
-# - 增大堆内存
-# - 优化对象创建
-# - 调整GC参数
+# 生产环境推荐配置（G1 收集器，4-8GB 堆）
+java -server \
+  -Xms4g -Xmx4g \
+  -XX:+UseG1GC \
+  -XX:MaxGCPauseMillis=200 \
+  -XX:+HeapDumpOnOutOfMemoryError \
+  -XX:HeapDumpPath=/tmp/heap.hprof \
+  -Xlog:gc*:file=/var/log/app/gc.log:time,uptime,level,tags:filecount=5,filesize=20m \
+  -Djava.security.egd=file:/dev/./urandom \  # 加速随机数生成
+  -jar app.jar
 ```
 
-## 小结
-
-性能调优是一个系统工程，需要从多个层面考虑：
-
-| 层面 | 优化方向 |
-|------|----------|
-| JVM | 内存、GC、JIT |
-| 代码 | 数据结构、算法、并发 |
-| 数据库 | SQL、连接池、索引 |
-| 架构 | 缓存、异步、分库分表 |
-
-::: tip 调优原则
-1. 先监控，后优化
-2. 找到瓶颈，针对性优化
-3. 优化后验证效果
-4. 不过度优化
+::: tip JVM 参数调优原则
+1. `-Xms` = `-Xmx`：避免运行时动态扩容
+2. 堆不要太大：不是越大越好，大堆 = GC 扫描范围大 = 停顿长
+3. 监控优先：先加监控（GC 日志、Metrics），观察一段时间再调
+4. 一次只调一个参数：否则不知道哪个参数生效了
 :::
+
+## 面试高频题
+
+**Q1：CPU 100% 怎么排查？**
+
+`top` 找进程 → `top -H -p pid` 找线程 → `printf "%x" tid` 转 16 进制 → `jstack pid | grep hex` 看线程栈。常见原因：死循环、正则回溯、GC 频繁。
+
+**Q2：如何判断是内存泄漏还是堆太小？**
+
+看老年代使用趋势：如果老年代在 Full GC 后仍然接近 100%，且持续上升不回落 → 内存泄漏。如果 Full GC 后老年代降到很低，但很快又满了 → 堆太小或对象创建太快。
+
+## 延伸阅读
+
+- 上一篇：[垃圾回收](gc.md) — GC 算法、收集器选择
+- [JVM 原理](jvm.md) — 运行时数据区、类加载、JIT
+- [高并发架构](../architecture/high-concurrency.md) — 缓存、限流、降级

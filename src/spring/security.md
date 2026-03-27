@@ -12,361 +12,167 @@ tag:
 
 # Spring Security
 
-Spring Security是强大且高度可定制的认证和访问控制框架。
+> 安全不是"加上登录功能"这么简单。认证（你是谁）、授权（你能做什么）、会话管理（你的登录状态）、CSRF 防护（跨站请求伪造）——每一个环节都有坑。Spring Security 提供了一套完整的安全框架，但它的学习曲线确实陡峭。这篇文章帮你理清核心脉络。
 
-## 核心概念
+## 基础入门：Spring Security 是什么？
 
-### 认证 vs 授权
-
-- **认证（Authentication）**：你是谁？（登录）
-- **授权（Authorization）**：你能做什么？（权限）
-
-### 核心组件
+### 为什么需要安全框架？
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      Security Filter Chain                  │
-├─────────────────────────────────────────────────────────────┤
-│ UsernamePasswordAuthenticationFilter → 认证                │
-│ JWTAuthenticationFilter → Token认证                        │
-│ FilterSecurityInterceptor → 授权检查                       │
-└─────────────────────────────────────────────────────────────┘
+安全不只是"加个登录页"：
+- 认证（Authentication）：你是谁？（登录、Token 校验）
+- 授权（Authorization）：你能做什么？（角色、权限）
+- 会话管理：登录状态怎么维护？
+- CSRF 防护：防止跨站请求伪造
+- 密码加密：不能明文存储密码
+
+这些安全逻辑散布在代码各处 → 难以维护
+Spring Security 提供了一套完整的安全框架，集中管理
 ```
 
-## 基础配置
-
-### 依赖
-
-```xml
-<dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-security</artifactId>
-</dependency>
-```
-
-### 安全配置
+### 最简配置
 
 ```java
+// SecurityFilterChain：定义安全规则
 @Configuration
 @EnableWebSecurity
-@RequiredArgsConstructor
 public class SecurityConfig {
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http
-            // 禁用CSRF（前后端分离）
-            .csrf(csrf -> csrf.disable())
-
-            // 配置请求授权
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/api/auth/**").permitAll()
-                .requestMatchers("/api/public/**").permitAll()
-                .requestMatchers("/api/admin/**").hasRole("ADMIN")
-                .anyRequest().authenticated()
+                .requestMatchers("/api/public/**").permitAll()  // 公开接口
+                .requestMatchers("/api/admin/**").hasRole("ADMIN")  // 管理员
+                .anyRequest().authenticated()  // 其他需要登录
             )
-
-            // Session管理
+            .csrf(csrf -> csrf.disable())  // REST API 通常关闭 CSRF
             .sessionManagement(session -> session
-                .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
-            )
-
-            // 添加JWT过滤器
-            .addFilterBefore(jwtAuthenticationFilter(),
-                UsernamePasswordAuthenticationFilter.class)
-
-            // 异常处理
-            .exceptionHandling(ex -> ex
-                .authenticationEntryPoint(jwtAuthenticationEntryPoint)
-            );
-
+                .sessionCreationPolicy(SessionCreationPolicy.STATELESS));  // 无状态
         return http.build();
     }
-
-    @Bean
-    public PasswordEncoder passwordEncoder() {
-        return new BCryptPasswordEncoder();
-    }
 }
 ```
 
-## JWT认证
+---
 
-### JWT工具类
+## 认证 vs 授权
+
+```
+认证（Authentication）：验证"你是谁"
+  → 登录、Token 校验、OAuth2
+
+授权（Authorization）：验证"你能做什么"
+  → 角色权限、接口权限、数据权限
+
+Spring Security 的核心流程：
+请求 → 过滤器链 → 认证过滤器 → 授权过滤器 → Controller
+```
+
+## JWT 认证——前后端分离的首选
+
+### 为什么选 JWT 而不是 Session？
+
+```
+Session 方式：
+  - 服务端存储会话信息（内存或 Redis）
+  - 客户端只存 Session ID（Cookie）
+  - 问题：多服务共享 Session 困难、服务端需要存储开销
+
+JWT 方式：
+  - Token 自包含（包含用户信息和签名）
+  - 服务端无状态（不需要存储 Token）
+  - 天然适合微服务（每个服务都能验证 Token）
+  - 缺点：无法主动失效（只能等 Token 过期）、Token 体积较大
+```
+
+### JWT 认证流程
 
 ```java
-@Component
-public class JwtUtils {
+// 1. 用户登录 → 验证账号密码 → 生成 JWT
+@PostMapping("/login")
+public Result<String> login(@RequestBody LoginRequest request) {
+    Authentication auth = authenticationManager.authenticate(
+        new UsernamePasswordAuthenticationToken(request.getUsername(), request.getPassword())
+    );
+    String token = jwtUtils.generateToken(auth.getName());
+    return Result.ok(token);
+}
 
-    @Value("${jwt.secret}")
-    private String secret;
+// 2. 后续请求在 Header 中携带 Token
+// Authorization: Bearer eyJhbGciOiJIUzI1NiJ9...
 
-    @Value("${jwt.expiration}")
-    private long expiration;
+// 3. JwtAuthenticationFilter 拦截每个请求
+//    → 解析 Token → 验证签名 → 获取用户名 → 查询用户信息 → 设置 SecurityContext
 
-    public String generateToken(UserDetails userDetails) {
-        Map<String, Object> claims = new HashMap<>();
-        return Jwts.builder()
-            .setClaims(claims)
-            .setSubject(userDetails.getUsername())
-            .setIssuedAt(new Date())
-            .setExpiration(new Date(System.currentTimeMillis() + expiration))
-            .signWith(SignatureAlgorithm.HS512, secret)
-            .compact();
-    }
-
-    public String getUsernameFromToken(String token) {
-        return Jwts.parser()
-            .setSigningKey(secret)
-            .parseClaimsJws(token)
-            .getBody()
-            .getSubject();
-    }
-
-    public boolean validateToken(String token) {
-        try {
-            Jwts.parser().setSigningKey(secret).parseClaimsJws(token);
-            return true;
-        } catch (Exception e) {
-            return false;
-        }
-    }
+// 4. Controller 中通过 SecurityContext 获取当前用户
+@GetMapping("/me")
+public User getCurrentUser() {
+    String username = SecurityContextHolder.getContext()
+        .getAuthentication().getName();
+    return userService.findByUsername(username);
 }
 ```
 
-### JWT过滤器
+### JWT 过滤器
 
 ```java
 @Component
-@RequiredArgsConstructor
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
-
-    private final JwtUtils jwtUtils;
-    private final UserDetailsService userDetailsService;
 
     @Override
     protected void doFilterInternal(HttpServletRequest request,
-            HttpServletResponse response, FilterChain filterChain)
-            throws ServletException, IOException {
+            HttpServletResponse response, FilterChain chain) throws ServletException, IOException {
 
-        String token = getTokenFromRequest(request);
-
+        String token = extractToken(request);
         if (token != null && jwtUtils.validateToken(token)) {
-            String username = jwtUtils.getUsernameFromToken(token);
-
+            String username = jwtUtils.getUsername(token);
             UserDetails userDetails = userDetailsService.loadUserByUsername(username);
-            UsernamePasswordAuthenticationToken authentication =
-                new UsernamePasswordAuthenticationToken(
-                    userDetails, null, userDetails.getAuthorities());
-            authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
 
-            SecurityContextHolder.getContext().setAuthentication(authentication);
+            UsernamePasswordAuthenticationToken auth =
+                new UsernamePasswordAuthenticationToken(userDetails, null, userDetails.getAuthorities());
+            SecurityContextHolder.getContext().setAuthentication(auth);
         }
-
-        filterChain.doFilter(request, response);
-    }
-
-    private String getTokenFromRequest(HttpServletRequest request) {
-        String bearerToken = request.getHeader("Authorization");
-        if (bearerToken != null && bearerToken.startsWith("Bearer ")) {
-            return bearerToken.substring(7);
-        }
-        return null;
+        chain.doFilter(request, response);
     }
 }
 ```
 
-## 用户认证服务
+::: danger JWT 安全注意事项
+1. **密钥管理**：JWT 密钥泄露 = 所有 Token 可被伪造。密钥不要硬编码在代码里，用配置中心或环境变量
+2. **Token 过期时间**：不要设置太长，建议 Access Token 15-30 分钟，Refresh Token 7 天
+3. **敏感信息**：不要在 JWT Payload 中放密码等敏感数据（Base64 不是加密，可被解码）
+4. **HTTPS**：JWT 在网络传输中可能被截获，必须使用 HTTPS
+:::
 
-### UserDetailsService实现
+## 方法级权限控制
 
 ```java
-@Service
-@RequiredArgsConstructor
-public class CustomUserDetailsService implements UserDetailsService {
+// 开启方法安全
+@EnableMethodSecurity(prePostEnabled = true)
 
-    private final UserRepository userRepository;
+// 在 Controller 或 Service 方法上使用
+@PreAuthorize("hasRole('ADMIN')")          // 需要 ADMIN 角色
+@PreAuthorize("hasAuthority('user:write')") // 需要 user:write 权限
+@PreAuthorize("#id == authentication.principal.id")  // 只能操作自己的数据
 
-    @Override
-    public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
-        User user = userRepository.findByUsername(username)
-            .orElseThrow(() -> new UsernameNotFoundException("用户不存在"));
-
-        return new org.springframework.security.core.userdetails.User(
-            user.getUsername(),
-            user.getPassword(),
-            user.getEnabled(),
-            true, true, true,
-            getAuthorities(user.getRoles())
-        );
-    }
-
-    private Collection<? extends GrantedAuthority> getAuthorities(Set<Role> roles) {
-        return roles.stream()
-            .map(role -> new SimpleGrantedAuthority("ROLE_" + role.getName()))
-            .collect(Collectors.toList());
-    }
-}
+// 复杂表达式
+@PreAuthorize("hasRole('ADMIN') or hasRole('MANAGER')")
+@PreAuthorize("isAuthenticated()")  // 已登录即可
 ```
 
-### 认证控制器
+## 面试高频题
 
-```java
-@RestController
-@RequestMapping("/api/auth")
-@RequiredArgsConstructor
-public class AuthController {
+**Q1：Spring Security 的过滤器链是什么？**
 
-    private final AuthenticationManager authenticationManager;
-    private final JwtUtils jwtUtils;
-    private final UserDetailsService userDetailsService;
+Spring Security 通过一系列 Filter 组成过滤器链处理请求。每个 Filter 负责一个安全关注点（如 CSRF、CORS、认证、授权）。`UsernamePasswordAuthenticationFilter` 处理表单登录，`BasicAuthenticationFilter` 处理 HTTP Basic 认证，自定义的 `JwtAuthenticationFilter` 处理 Token 认证。顺序由 `@Order` 或 `FilterRegistrationBean` 控制。
 
-    @PostMapping("/login")
-    public ResponseEntity<?> login(@RequestBody LoginRequest request) {
-        Authentication authentication = authenticationManager.authenticate(
-            new UsernamePasswordAuthenticationToken(
-                request.getUsername(),
-                request.getPassword()
-            )
-        );
+**Q2：`@PreAuthorize` 和 `@Secured` 的区别？**
 
-        SecurityContextHolder.getContext().setAuthentication(authentication);
-        String token = jwtUtils.generateToken((UserDetails) authentication.getPrincipal());
+`@Secured` 只支持简单的角色检查（`@Secured("ROLE_ADMIN")`），不支持 SpEL 表达式。`@PreAuthorize` 支持 SpEL 表达式，可以做更复杂的权限判断（如 `hasRole('ADMIN') or #id == authentication.principal.id`）。推荐用 `@PreAuthorize`。
 
-        return ResponseEntity.ok(new JwtResponse(token));
-    }
+## 延伸阅读
 
-    @PostMapping("/register")
-    public ResponseEntity<?> register(@RequestBody RegisterRequest request) {
-        // 注册逻辑...
-        return ResponseEntity.ok("注册成功");
-    }
-}
-```
-
-## 方法级安全
-
-### 启用方法安全
-
-```java
-@Configuration
-@EnableMethodSecurity(prePostEnabled = true, securedEnabled = true)
-public class SecurityConfig {
-}
-```
-
-### 使用注解
-
-```java
-@RestController
-@RequestMapping("/api/users")
-public class UserController {
-
-    // 需要认证
-    @PreAuthorize("isAuthenticated()")
-    @GetMapping("/me")
-    public User getCurrentUser() {
-        return userService.getCurrentUser();
-    }
-
-    // 需要ADMIN角色
-    @PreAuthorize("hasRole('ADMIN')")
-    @GetMapping("/admin/all")
-    public List<User> getAllUsers() {
-        return userService.findAll();
-    }
-
-    // 需要特定权限
-    @PreAuthorize("hasAuthority('user:write')")
-    @PostMapping
-    public User createUser(@RequestBody UserDTO dto) {
-        return userService.create(dto);
-    }
-
-    // 复杂表达式
-    @PreAuthorize("hasRole('ADMIN') or #id == authentication.principal.id")
-    @PutMapping("/{id}")
-    public User update(@PathVariable Long id, @RequestBody UserDTO dto) {
-        return userService.update(id, dto);
-    }
-
-    // 方法调用后校验
-    @PostAuthorize("returnObject.username == authentication.principal.username")
-    @GetMapping("/{id}")
-    public User getById(@PathVariable Long id) {
-        return userService.findById(id);
-    }
-
-    // 过滤返回结果
-    @PostFilter("filterObject.owner == authentication.principal.username")
-    @GetMapping("/my")
-    public List<User> getMyUsers() {
-        return userService.findAll();
-    }
-}
-```
-
-## CORS配置
-
-```java
-@Configuration
-public class CorsConfig {
-
-    @Bean
-    public CorsConfigurationSource corsConfigurationSource() {
-        CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOrigins(List.of("https://example.com"));
-        configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE"));
-        configuration.setAllowedHeaders(List.of("*"));
-        configuration.setAllowCredentials(true);
-        configuration.setMaxAge(3600L);
-
-        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
-        source.registerCorsConfiguration("/**", configuration);
-        return source;
-    }
-}
-```
-
-## OAuth2
-
-### 资源服务器配置
-
-```yaml
-spring:
-  security:
-    oauth2:
-      resourceserver:
-        jwt:
-          issuer-uri: https://auth.example.com
-```
-
-```java
-@Configuration
-@EnableWebSecurity
-public class OAuth2ResourceServerConfig {
-
-    @Bean
-    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
-        http
-            .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/api/public/**").permitAll()
-                .anyRequest().authenticated()
-            )
-            .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()));
-
-        return http.build();
-    }
-}
-```
-
-## 小结
-
-| 组件 | 说明 |
-|------|------|
-| SecurityFilterChain | 安全过滤器链 |
-| UserDetailsService | 用户详情服务 |
-| PasswordEncoder | 密码编码器 |
-| JWT | 无状态Token认证 |
-| @PreAuthorize | 方法级授权 |
-| OAuth2 | 开放授权 |
+- 上一篇：[Spring Cloud](cloud.md) — 微服务架构、服务治理
+- [高并发架构](../architecture/high-concurrency.md) — 缓存、限流、降级
+- [数据库优化](../database/mysql.md) — 索引、事务、分库分表

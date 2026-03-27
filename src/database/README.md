@@ -1,6 +1,6 @@
 ---
 title: 数据库
-icon: database
+icon: mdi:database
 order: 4
 category:
   - 数据库

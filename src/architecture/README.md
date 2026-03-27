@@ -1,6 +1,6 @@
 ---
 title: 架构设计
-icon: architecture
+icon: mdi:office-building-cog
 order: 7
 category:
   - 架构

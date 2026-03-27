@@ -1,6 +1,6 @@
 ---
 title: Java进阶
-icon: rocket
+icon: mdi:rocket
 order: 2
 category:
   - Java

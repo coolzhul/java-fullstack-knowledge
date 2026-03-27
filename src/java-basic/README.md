@@ -1,6 +1,6 @@
 ---
 title: Java基础
-icon: java
+icon: mdi:language-java
 order: 1
 category:
   - Java

@@ -1,6 +1,6 @@
 ---
 title: 分布式技术
-icon: network
+icon: mdi:network
 order: 5
 category:
   - 分布式

@@ -5,344 +5,133 @@ order: 2
 category:
   - 架构
 tag:
+  - 架构
   - 微服务
-  - 架构设计
 ---
 
 # 微服务架构
 
-微服务架构是将单体应用拆分为一组小型服务的架构风格。
+> 微服务不是"把单体拆成很多小服务"就叫微服务。拆分后带来的分布式复杂性——服务发现、配置管理、链路追踪、分布式事务、灰度发布——远超单体。这篇文章帮你理清微服务的核心挑战和应对策略。
 
-## 单体 vs 微服务
+## 基础入门：单体 vs 微服务
 
-| 对比项 | 单体架构 | 微服务架构 |
-|--------|----------|------------|
-| 部署 | 整体部署 | 独立部署 |
-| 扩展 | 整体扩展 | 按需扩展 |
-| 技术栈 | 统一 | 可多样化 |
-| 开发 | 简单 | 复杂 |
-| 运维 | 简单 | 复杂 |
-| 故障影响 | 全局 | 局部 |
-
-## 微服务架构
+### 单体架构
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      客户端                                  │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│                      API Gateway                            │
-│              (Kong / Spring Cloud Gateway)                  │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐
-│  用户服务   │  │  订单服务   │  │  商品服务   │  │  支付服务   │
-│  User Svc   │  │  Order Svc  │  │ Product Svc │  │ Payment Svc │
-└─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘
-       ↓                ↓                ↓                ↓
-┌─────────────────────────────────────────────────────────────┐
-│                    基础设施层                                │
-│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────────────┐│
-│  │ 服务发现 │  │ 配置中心 │  │ 消息队列 │  │   链路追踪     ││
-│  │  Nacos  │  │  Nacos  │  │ Kafka   │  │  SkyWalking   ││
-│  └─────────┘  └─────────┘  └─────────┘  └─────────────────┘│
-└─────────────────────────────────────────────────────────────┘
+所有功能在一个应用里（一个 War/Jar）
+├── 用户模块
+├── 订单模块
+├── 支付模块
+└── 库存模块
+
+优点：简单、好调试、部署方便
+缺点：代码量大、发布慢、扩展困难
+```
+
+### 微服务架构
+
+```
+每个模块独立部署（多个 Jar）
+├── 用户服务（独立数据库）
+├── 订单服务（独立数据库）
+├── 支付服务（独立数据库）
+└── 库存服务（独立数据库）
+
+优点：独立开发、独立部署、独立扩展
+缺点：分布式复杂性（服务发现、配置、链路追踪...）
+```
+
+### 什么时候拆微服务？
+
+- 团队 > 10 人，单体协作困难
+- 某些模块需要独立扩容
+- 模块间发布节奏差异大
+
+---
+
+
+## 什么时候该拆微服务？
+
+```
+不该拆的情况：
+  - 团队 < 10 人
+  - 业务还在快速变化（频繁拆分和合并）
+  - 单体应用运行良好，没有明显的扩展瓶颈
+
+该拆的情况：
+  - 团队 > 20 人，单体开发效率严重下降
+  - 某些模块需要独立扩容（如支付模块流量大）
+  - 不同模块的发布节奏差异大
+  - 团队组织结构已经是按业务划分的（康威定律）
+
+康威定律：系统的架构会趋同于组织的沟通结构
+→ 如果团队按业务线划分，架构也应该按业务拆分
 ```
 
 ## 服务拆分原则
 
-### 按业务能力拆分
-
 ```
-用户服务 - 用户注册、登录、信息管理
-订单服务 - 订单创建、查询、状态管理
-商品服务 - 商品管理、库存管理
-支付服务 - 支付处理、退款
-通知服务 - 短信、邮件、推送
-```
+1. 单一职责：每个服务只做一件事
+   ✅ 订单服务、用户服务、支付服务
+   ❌ 订单+支付服务（职责不清）
 
-### 拆分原则
+2. 高内聚低耦合：服务内部紧密相关，服务之间松散关联
+   - 领域驱动设计（DDD）来划定服务边界
 
-| 原则 | 说明 |
-|------|------|
-| 单一职责 | 每个服务只做一件事 |
-| 高内聚 | 服务内部功能相关 |
-| 低耦合 | 服务间依赖最小 |
-| 独立部署 | 可独立开发部署 |
+3. 数据隔离：每个服务有自己的数据库
+   - 不要跨服务直接访问对方的数据库
+   - 通过 API 或消息队列通信
 
-## 服务通信
+4. 独立部署：每个服务可以独立发布
+   - 不需要所有服务一起发布
 
-### 同步通信
-
-```java
-// REST API
-@GetMapping("/users/{id}")
-public User getUser(@PathVariable Long id) {
-    return restTemplate.getForObject(
-        "http://user-service/api/users/" + id, User.class);
-}
-
-// OpenFeign
-@FeignClient(name = "user-service")
-public interface UserClient {
-    @GetMapping("/api/users/{id}")
-    User getUser(@PathVariable Long id);
-}
-
-// gRPC
-public User getUser(Long id) {
-    GetUserRequest request = GetUserRequest.newBuilder()
-        .setId(id)
-        .build();
-    return userStub.getUser(request);
-}
+5. 治理独立：每个服务有自己的配置、监控、日志
 ```
 
-### 异步通信
+## 微服务的核心挑战
 
-```java
-// 事件驱动
-@Service
-public class OrderService {
-
-    @Autowired
-    private KafkaTemplate<String, OrderEvent> kafkaTemplate;
-
-    public void createOrder(OrderDTO dto) {
-        // 创建订单
-        Order order = orderDao.save(new Order(dto));
-
-        // 发布事件
-        OrderEvent event = new OrderEvent(order.getId(), "CREATED");
-        kafkaTemplate.send("order-events", event);
-    }
-}
-
-// 订阅事件
-@KafkaListener(topics = "order-events")
-public void handleOrderEvent(OrderEvent event) {
-    if ("CREATED".equals(event.getType())) {
-        // 扣减库存
-        inventoryService.deduct(event.getProductId(), event.getQuantity());
-    }
-}
+```mermaid
+graph TD
+    GW[API 网关 Gateway] --> S1[用户服务]
+    GW --> S2[订单服务]
+    GW --> S3[商品服务]
+    subgraph infra[基础设施]
+        NACOS[Nacos 注册/配置中心]
+        SENTINEL[Sentinel 熔断降级]
+    end
+    S1 -.-> NACOS
+    S2 -.-> NACOS
+    S3 -.-> NACOS
+    S1 -.-> SENTINEL
+    S2 -.-> SENTINEL
+    S3 -.-> SENTINEL
 ```
 
-## 服务治理
+| 挑战 | 解决方案 |
+|------|----------|
+| 服务发现 | Nacos / Consul / Eureka |
+| 配置管理 | Nacos Config / Apollo |
+| API 网关 | Spring Cloud Gateway |
+| 服务调用 | OpenFeign / gRPC |
+| 负载均衡 | Ribbon / LoadBalancer |
+| 熔断降级 | Sentinel / Resilience4j |
+| 链路追踪 | SkyWalking / Zipkin |
+| 分布式事务 | Seata / 本地消息表 |
+| 统一日志 | ELK / Loki |
+| 灰度发布 | 网关路由规则 + Feature Flag |
 
-### 服务注册发现
+## 面试高频题
 
-```yaml
-# Nacos配置
-spring:
-  cloud:
-    nacos:
-      discovery:
-        server-addr: localhost:8848
-        namespace: dev
-        group: DEFAULT_GROUP
-```
+**Q1：微服务之间怎么通信？**
 
-### 负载均衡
+同步：HTTP/REST（OpenFeign）、gRPC（高性能、适合服务间调用）。异步：消息队列（RocketMQ、Kafka）。选型建议：业务服务间同步调用用 gRPC（性能好、强类型），与外部系统对接用 REST（通用性好），非核心链路用 MQ（解耦、削峰）。
 
-```java
-@Configuration
-public class LoadBalancerConfig {
+**Q2：服务拆分太细有什么问题？**
 
-    @Bean
-    ReactorLoadBalancer<ServiceInstance> randomLoadBalancer(
-            Environment environment, LoadBalancerClientFactory factory) {
-        String name = environment.getProperty(LoadBalancerClientFactory.PROPERTY_NAME);
-        return new RandomLoadBalancer(
-            factory.getLazyProvider(name, ServiceInstanceListSupplier.class), name);
-    }
-}
+调用链路过长（A → B → C → D，延迟叠加）、运维复杂度暴增、分布式事务困难、测试困难（需要同时启动多个服务）。建议从粗粒度开始，按需拆分，不要一开始就拆得太细。
 
-// 使用
-@LoadBalanced
-@Bean
-public RestTemplate restTemplate() {
-    return new RestTemplate();
-}
-```
+## 延伸阅读
 
-### 熔断降级
-
-```java
-// Sentinel
-@SentinelResource(
-    value = "getUser",
-    fallback = "getUserFallback",
-    blockHandler = "handleBlock"
-)
-public User getUser(Long id) {
-    return userClient.getUser(id);
-}
-
-public User getUserFallback(Long id, Throwable ex) {
-    return User.builder()
-        .id(id)
-        .name("默认用户")
-        .build();
-}
-```
-
-### 限流
-
-```java
-// 接口限流
-@RestController
-public class ApiController {
-
-    @GetMapping("/api/data")
-    @SentinelResource(value = "getData", blockHandler = "handleBlock")
-    public Result getData() {
-        return Result.success(dataService.getData());
-    }
-
-    public Result handleBlock(BlockException ex) {
-        return Result.error("系统繁忙，请稍后重试");
-    }
-}
-
-// 网关限流
-spring:
-  cloud:
-    gateway:
-      routes:
-        - id: user-service
-          uri: lb://user-service
-          predicates:
-            - Path=/api/users/**
-          filters:
-            - name: RequestRateLimiter
-              args:
-                redis-rate-limiter.replenishRate: 10
-                redis-rate-limiter.burstCapacity: 20
-```
-
-## 分布式事务
-
-### Saga模式
-
-```java
-// 订单创建Saga
-public class CreateOrderSaga {
-
-    public void execute(OrderDTO dto) {
-        // 步骤1：创建订单
-        Order order = orderService.create(dto);
-
-        try {
-            // 步骤2：扣减库存
-            inventoryService.deduct(dto.getProductId(), dto.getQuantity());
-
-            // 步骤3：扣减余额
-            accountService.debit(dto.getUserId(), dto.getAmount());
-
-        } catch (Exception e) {
-            // 补偿操作
-            compensate(order);
-            throw e;
-        }
-    }
-
-    private void compensate(Order order) {
-        // 恢复库存
-        inventoryService.restore(order.getProductId(), order.getQuantity());
-        // 取消订单
-        orderService.cancel(order.getId());
-    }
-}
-```
-
-## 配置管理
-
-### 配置中心
-
-```yaml
-# Nacos配置
-spring:
-  cloud:
-    nacos:
-      config:
-        server-addr: localhost:8848
-        file-extension: yaml
-        shared-configs:
-          - data-id: common.yaml
-            refresh: true
-```
-
-### 动态刷新
-
-```java
-@RefreshScope
-@RestController
-public class ConfigController {
-
-    @Value("${app.config.feature-enabled:false}")
-    private boolean featureEnabled;
-
-    @GetMapping("/config")
-    public boolean getConfig() {
-        return featureEnabled;
-    }
-}
-```
-
-## 链路追踪
-
-### SkyWalking
-
-```bash
-# 启动Agent
-java -javaagent:skywalking-agent.jar \
-     -Dskywalking.agent.service_name=user-service \
-     -Dskywalking.collector.backend_service=localhost:11800 \
-     -jar app.jar
-```
-
-### Sleuth + Zipkin
-
-```yaml
-spring:
-  zipkin:
-    base-url: http://localhost:9411
-  sleuth:
-    sampler:
-      probability: 1.0
-```
-
-## API网关
-
-### Spring Cloud Gateway
-
-```yaml
-spring:
-  cloud:
-    gateway:
-      routes:
-        - id: user-service
-          uri: lb://user-service
-          predicates:
-            - Path=/api/users/**
-          filters:
-            - StripPrefix=1
-            - name: RequestRateLimiter
-              args:
-                redis-rate-limiter.replenishRate: 100
-                redis-rate-limiter.burstCapacity: 200
-```
-
-## 小结
-
-| 组件 | 说明 |
-|------|------|
-| 服务注册 | Nacos/Eureka/Consul |
-| 配置中心 | Nacos/Spring Cloud Config |
-| 服务调用 | OpenFeign/Dubbo/gRPC |
-| 熔断降级 | Sentinel/Hystrix/Resilience4j |
-| 链路追踪 | SkyWalking/Zipkin/Jaeger |
-| API网关 | Spring Cloud Gateway/Kong |
-| 消息队列 | Kafka/RabbitMQ/RocketMQ |
+- 上一篇：[高并发架构](high-concurrency.md) — 缓存、限流、降级
+- [Spring Cloud](../spring/cloud.md) — 微服务技术栈实战
+- [分布式事务](../distributed/transaction.md) — Seata、TCC、Saga
