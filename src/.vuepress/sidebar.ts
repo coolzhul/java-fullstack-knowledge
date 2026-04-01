@@ -4,6 +4,9 @@ export default sidebar({
   // 设计模式子模块 - 更精确的路径要放前面
   "/java-advanced/design-patterns/": "structure",
 
+  // 面试题库模块
+  "/interview/": "structure",
+
   // Java进阶模块
   "/java-advanced/": "structure",
 
@@ -64,6 +67,11 @@ export default sidebar({
       text: "架构设计",
       icon: "architecture",
       link: "/architecture/",
+    },
+    {
+      text: "面试题库",
+      icon: "clipboard",
+      link: "/interview/",
     },
   ],
 });
