@@ -404,6 +404,133 @@ public class Duck extends Animal implements Flyable, Swimmable {
 }
 ```
 
+### 接口的演进——从 Java 8 到 Java 9+
+
+接口在 Java 的演进中经历了重大变化：
+
+```mermaid
+graph TD
+    subgraph "Java 7 及之前"
+        I1["接口只有抽象方法<br/>void fly();"]
+    end
+    subgraph "Java 8"
+        I2["+ default 方法<br/>default void takeOff() {}<br/>解决接口演进问题"]
+        I3["+ static 方法<br/>static void info() {}<br/>接口级别的工具方法"]
+    end
+    subgraph "Java 9"
+        I4["+ private 方法<br/>private void helper() {}<br/>default 方法间代码复用"]
+    end
+    I1 --> I2 --> I4
+    I1 --> I3
+    
+    style I1 fill:#ffcdd2
+    style I2 fill:#c8e6c9
+    style I3 fill:#c8e6c9
+    style I4 fill:#bbdefb
+```
+
+#### Java 8 default 方法——解决接口演进问题
+
+```java
+// 问题：Java 8 之前，给接口加一个新方法，所有实现类都要改
+// Java 8 引入 default 方法，可以给接口添加新方法而不破坏现有实现
+
+public interface List<E> {
+    // Java 8 之前就有的方法
+    int size();
+    E get(int index);
+    
+    // Java 8 新增：default 方法，不强制实现类重写
+    default void forEach(Consumer<? super E> action) {
+        for (int i = 0; i < size(); i++) {
+            action.accept(get(i));
+        }
+    }
+    
+    default void replaceAll(UnaryOperator<E> operator) {
+        for (int i = 0; i < size(); i++) {
+            set(i, operator.apply(get(i)));
+        }
+    }
+}
+
+// default 方法的"钻石问题"：一个类实现了两个接口，两个接口有同名的 default 方法
+public interface A {
+    default void hello() { System.out.println("A"); }
+}
+
+public interface B {
+    default void hello() { System.out.println("B"); }
+}
+
+// 必须显式指定使用哪个，或者重写
+public class C implements A, B {
+    @Override
+    public void hello() {
+        A.super.hello();  // 显式调用 A 的 default 方法
+        // B.super.hello();  // 也可以调用 B 的
+    }
+}
+```
+
+#### Java 9 private 方法——default 方法间的代码复用
+
+```java
+public interface Validator {
+    // Java 8：static 方法（工具方法，不属于任何实例）
+    static boolean isNotEmpty(String s) {
+        return s != null && !s.isBlank();
+    }
+    
+    // Java 9：private 方法（default 方法之间的公共逻辑提取）
+    private String trimAndLower(String s) {
+        return s.trim().toLowerCase();
+    }
+    
+    default boolean isValidEmail(String email) {
+        String normalized = trimAndLower(email);  // 复用 private 方法
+        return normalized.contains("@") && normalized.contains(".");
+    }
+    
+    default boolean isValidPhone(String phone) {
+        String normalized = trimAndLower(phone);  // 复用 private 方法
+        return normalized.matches("\\d{11}");
+    }
+}
+```
+
+#### 函数式接口——Lambda 的基石
+
+```java
+// 函数式接口：只有一个抽象方法的接口
+// @FunctionalInterface 注解是可选的，但推荐加上（编译器会检查）
+
+@FunctionalInterface
+public interface Function<T, R> {
+    R apply(T t);
+    // 只能有一个抽象方法
+}
+
+// JDK 内置的函数式接口
+// Predicate<T>    → boolean test(T t)        → 判断（过滤）
+// Function<T, R>  → R apply(T t)              → 转换（map）
+// Consumer<T>     → void accept(T t)           → 消费（forEach）
+// Supplier<T>     → T get()                    → 提供（工厂）
+// BiFunction<T,U,R> → R apply(T t, U u)        → 双参数转换
+
+// Lambda 就是函数式接口的匿名实现
+List<String> names = List.of("Alice", "Bob", "Charlie");
+names.stream()
+     .filter(name -> name.length() > 3)      // Predicate<String>
+     .map(String::toUpperCase)                // Function<String, String>
+     .forEach(System.out::println);           // Consumer<String>
+
+// 方法引用是 Lambda 的简写
+// String::toUpperCase  等价于  s -> s.toUpperCase()
+// System.out::println  等价于  s -> System.out.println(s)
+// Integer::sum         等价于  (a, b) -> a + b
+```
+
 ### 怎么选？
 
 ```mermaid
@@ -424,30 +551,339 @@ graph TD
 | 方法 | 可以有具体方法 | Java 8+ 有 default 方法 |
 | 多继承 | 单继承 | 多实现 |
 
-## 内部类与枚举
+## 内部类深入
 
-### 内部类——让类只属于另一个类
+### 四种内部类及其访问规则
+
+```mermaid
+graph TD
+    OUTER["外部类 Outer"]
+    
+    subgraph "成员内部类（非静态）"
+        INNER["class Inner { }"]
+    end
+    
+    subgraph "静态内部类"
+        SINNER["static class StaticInner { }"]
+    end
+    
+    subgraph "局部内部类"
+        LINNER["方法内 class Local { }"]
+    end
+    
+    subgraph "匿名内部类"
+        AINNER["new Runnable() { @Override run() {} }"]
+    end
+    
+    OUTER --- INNER
+    OUTER --- SINNER
+    OUTER -.->|定义在方法内| LINNER
+    OUTER -.->|一次性使用| AINNER
+    
+    style INNER fill:#fff3e0
+    style SINNER fill:#e8f5e9
+    style LINNER fill:#e3f2fd
+    style AINNER fill:#fce4ec
+```
+
+#### 静态内部类——最推荐
 
 ```java
-// 内部类可以直接访问外部类的私有成员
+// 静态内部类不持有外部类引用，最安全
+// 用法：与外部类关系密切，但不需要访问外部类实例
 public class LinkedList<E> {
     private Node<E> head;
-
-    // 内部类：Node 只被 LinkedList 使用，不需要暴露
+    
+    // 静态内部类：Node 不需要访问 LinkedList 的实例字段
     private static class Node<E> {
         E data;
         Node<E> next;
-        Node(E data) { this.data = data; }
+        
+        Node(E data) {
+            this.data = data;
+        }
+    }
+    
+    public void add(E item) {
+        head = new Node<>(item);  // 直接使用，不需要外部类实例
     }
 }
 
-// 匿名内部类 → Lambda（Java 8+）
+// 访问规则：
+// ✅ 可以访问外部类的 static 成员（包括 private）
+// ❌ 不能访问外部类的实例成员（没有外部类引用）
+// ✅ 可以有 static 成员
+// ✅ 创建时不需要外部类实例：new Outer.StaticInner()
+
+// 经典使用场景：Builder 模式
+public class HttpRequest {
+    private final String url;
+    private final String method;
+    private final Map<String, String> headers;
+    
+    private HttpRequest(Builder builder) {
+        this.url = builder.url;
+        this.method = builder.method;
+        this.headers = builder.headers;
+    }
+    
+    public static class Builder {
+        private String url;
+        private String method = "GET";
+        private Map<String, String> headers = new HashMap<>();
+        
+        public Builder url(String url) { this.url = url; return this; }
+        public Builder method(String method) { this.method = method; return this; }
+        public Builder header(String key, String value) {
+            headers.put(key, value);
+            return this;
+        }
+        
+        public HttpRequest build() { return new HttpRequest(this); }
+    }
+}
+
+// 使用
+HttpRequest request = new HttpRequest.Builder()
+    .url("https://api.example.com/users")
+    .method("POST")
+    .header("Content-Type", "application/json")
+    .build();
+```
+
+#### 成员内部类（非静态）——谨慎使用
+
+```java
+public class Outer {
+    private String outerField = "outer";
+    
+    // 成员内部类：隐式持有外部类引用
+    public class Inner {
+        private String innerField = "inner";
+        
+        public void print() {
+            // ✅ 可以直接访问外部类的所有成员（包括 private）
+            System.out.println(outerField);
+            // ✅ 可以用 Outer.this 区分同名成员
+            System.out.println(Outer.this.outerField);
+        }
+    }
+    
+    public Inner createInner() {
+        return new Inner();  // 隐式持有 this 引用
+    }
+}
+
+// 创建成员内部类需要外部类实例
+Outer outer = new Outer();
+Outer.Inner inner = outer.new Inner();
+```
+
+#### 局部内部类——极少使用
+
+```java
+public void processData() {
+    final int limit = 100;  // 局部内部类只能访问 effectively final 的局部变量
+    
+    // 局部内部类：定义在方法内，作用域仅限于该方法
+    class DataProcessor {
+        void process() {
+            System.out.println("Processing with limit: " + limit);  // ✅ 可以访问
+            // limit = 200;  // ❌ 如果 limit 不是 final，编译错误
+        }
+    }
+    
+    DataProcessor processor = new DataProcessor();
+    processor.process();
+}
+// DataProcessor 在方法外不可见
+```
+
+#### 匿名内部类——Lambda 的前身
+
+```java
+// 匿名内部类：没有名字的内部类，一次性使用
+// 在 Lambda 出现之前，匿名内部类是创建回调的主要方式
+
+// 传统写法：匿名内部类
+button.addActionListener(new ActionListener() {
+    @Override
+    public void actionPerformed(ActionEvent e) {
+        System.out.println("clicked");
+    }
+});
+
+// Java 8+ Lambda 写法（更简洁）
 button.addActionListener(e -> System.out.println("clicked"));
+
+// 匿名内部类仍然有用的场景：
+// 1. 需要实现多个方法（非函数式接口）
+Comparator<String> comp = new Comparator<String>() {
+    @Override
+    public int compare(String a, String b) { return a.length() - b.length(); }
+    
+    @Override
+    public boolean equals(Object obj) { return false; }  // 只有一个抽象方法不算
+};
+
+// 2. 需要额外的字段或状态
+Thread t = new Thread(new Runnable() {
+    private int count = 0;
+    @Override
+    public void run() {
+        while (count < 10) {
+            System.out.println(count++);
+        }
+    }
+});
+
+// 3. 匿名类可以访问和修改外部类的实例字段
+//    （Lambda 捕获的变量必须是 effectively final）
 ```
 
 ::: danger 内存泄漏高发场景
 非静态内部类隐式持有外部类引用。如果内部类对象的生命周期长于外部类（如线程池中的任务），会导致外部类无法被 GC。**长期存活的内部类，一定要用 static。**
 :::
+
+## 枚举深入
+
+### 枚举的底层实现——继承 Enum
+
+```java
+// 你写的代码
+public enum Season {
+    SPRING, SUMMER, AUTUMN, WINTER
+}
+
+// 编译器实际生成的代码（简化版）
+public final class Season extends Enum<Season> {
+    public static final Season SPRING = new Season("SPRING", 0);
+    public static final Season SUMMER = new Season("SUMMER", 1);
+    public static final Season AUTUMN = new Season("AUTUMN", 2);
+    public static final Season WINTER = new Season("WINTER", 3);
+    
+    private static final Season[] $VALUES = {SPRING, SUMMER, AUTUMN, WINTER};
+    
+    private Season(String name, int ordinal) {
+        super(name, ordinal);
+    }
+    
+    public static Season[] values() { return $VALUES.clone(); }
+    public static Season valueOf(String name) { return ... }
+}
+```
+
+**枚举的本质：**
+- 每个枚举值都是 `public static final` 的实例
+- 枚举类**隐式继承** `java.lang.Enum`，不能再继承其他类
+- 枚举类是 `final` 的（不能被继承）
+- 枚举的构造函数**只能是 private**（不能在外部创建实例）
+
+### 枚举单例——最佳的单例实现方式
+
+```java
+// Effective Java 推荐：用枚举实现单例
+// 原因：
+// 1. 天然防止反射攻击（Enum 的构造函数由 JVM 保护）
+// 2. 天然防止序列化攻击（Enum 的反序列化返回已有实例）
+// 3. 线程安全（类加载时就初始化）
+
+public enum DatabaseConnection {
+    INSTANCE;
+    
+    private Connection connection;
+    
+    DatabaseConnection() {
+        // 枚举的构造函数只在初始化时执行一次
+        this.connection = DriverManager.getConnection("jdbc:mysql://localhost:3306/mydb");
+    }
+    
+    public Connection getConnection() {
+        return connection;
+    }
+}
+
+// 使用
+Connection conn = DatabaseConnection.INSTANCE.getConnection();
+```
+
+### 枚举实现接口与携带行为
+
+```java
+// 枚举可以携带方法和实现接口
+public enum Operation implements BiFunction<Double, Double, Double> {
+    ADD {
+        @Override
+        public Double apply(Double a, Double b) { return a + b; }
+    },
+    SUBTRACT {
+        @Override
+        public Double apply(Double a, Double b) { return a - b; }
+    },
+    MULTIPLY {
+        @Override
+        public Double apply(Double a, Double b) { return a * b; }
+    },
+    DIVIDE {
+        @Override
+        public Double apply(Double a, Double b) {
+            if (b == 0) throw new ArithmeticException("除数不能为 0");
+            return a / b;
+        }
+    };
+    
+    // 每个枚举值必须实现接口方法
+}
+
+// 使用——多态调用
+double result = Operation.MULTIPLY.apply(3.0, 4.0);  // 12.0
+```
+
+### 枚举与 switch
+
+```java
+// switch 对枚举有特殊支持
+// 注意：case 中不需要写枚举类名，直接写枚举值
+Season season = Season.SUMMER;
+
+switch (season) {
+    case SPRING -> System.out.println("春暖花开");
+    case SUMMER -> System.out.println("烈日炎炎");
+    case AUTUMN -> System.out.println("秋高气爽");
+    case WINTER -> System.out.println("寒冬腊月");
+}
+
+// Java 12+ switch 表达式 + 穷举检查
+String activity = switch (season) {
+    case SPRING, AUTUMN -> "旅游";
+    case SUMMER -> "游泳";
+    case WINTER -> "滑雪";
+    // 不需要 default，编译器知道 Season 只有四个值
+};
+
+// 编译器会在枚举值新增但 switch 未处理时报错（穷举检查）
+```
+
+### 枚举的高级用法
+
+```java
+// 枚举的常用方法
+Season s = Season.SUMMER;
+s.name();       // "SUMMER"——枚举值的名称
+s.ordinal();    // 1——声明顺序（从 0 开始）
+s.toString();   // "SUMMER"——默认和 name() 一样，但可以重写
+
+// EnumSet——枚举专用的 Set，位向量实现，性能极高
+EnumSet<Season> warmSeasons = EnumSet.of(Season.SPRING, Season.SUMMER);
+EnumSet<Season> coldSeasons = EnumSet.range(Season.AUTUMN, Season.WINTER);
+EnumSet<Season> all = EnumSet.allOf(Season.class);
+
+// EnumMap——枚举专用的 Map，数组实现，性能极高
+EnumMap<Season, String> description = new EnumMap<>(Season.class);
+description.put(Season.SPRING, "春暖花开");
+description.put(Season.SUMMER, "烈日炎炎");
+// EnumMap 内部用枚举的 ordinal() 作为数组下标，查找 O(1)
+```
 
 ### 枚举——替代 int 常量
 
@@ -477,6 +913,294 @@ public enum Season {
 
 Season s = Season.SUMMER;
 System.out.println(s.getChineseName());  // 夏天
+```
+
+## Record 类——不可变数据载体（Java 14+）
+
+### record 的本质
+
+```java
+// record 是 Java 14 引入的不可变数据载体
+// 编译器自动生成：构造函数、访问器、equals、hashCode、toString
+
+public record Point(int x, int y) {}
+
+// 编译器实际生成的代码（简化版）：
+public final class Point {
+    private final int x;
+    private final int y;
+    
+    public Point(int x, int y) { this.x = x; this.y = y; }
+    public int x() { return x; }  // 注意：不是 getX()
+    public int y() { return y; }
+    
+    @Override public boolean equals(Object o) { /* 基于所有组件 */ }
+    @Override public int hashCode() { /* 基于所有组件 */ }
+    @Override public String toString() { return "Point[x=" + x + ", y=" + y + "]"; }
+}
+```
+
+### record 的高级用法
+
+```java
+// 1. 紧凑构造函数——用于参数校验
+public record Age(int value) {
+    public Age {
+        if (value < 0 || value > 150) {
+            throw new IllegalArgumentException("年龄不合法: " + value);
+        }
+        value = Math.max(0, value);  // 可以对参数做规范化
+    }
+}
+
+// 2. 自定义方法
+public record Rectangle(double width, double height) {
+    public double area() { return width * height; }
+    public double perimeter() { return 2 * (width + height); }
+    public Rectangle scaled(double factor) {
+        return new Rectangle(width * factor, height * factor);
+    }
+}
+
+// 3. 实现接口
+public record Circle(double radius) implements Shape {
+    @Override
+    public double area() { return Math.PI * radius * radius; }
+}
+
+// 4. 嵌套 record
+public record Person(String name, Address address) {}
+public record Address(String city, String street, String zipCode) {}
+
+// 5. record 与模式匹配（Java 21+）
+static void printShape(Shape shape) {
+    switch (shape) {
+        case Circle(var radius) -> System.out.println("圆，半径: " + radius);
+        case Rectangle(var w, var h) -> System.out.println("矩形，" + w + "x" + h);
+        default -> System.out.println("未知形状");
+    }
+}
+```
+
+### record vs Lombok @Value 对比
+
+| 维度 | `record`（Java 14+） | Lombok `@Value` |
+|------|---------------------|-----------------|
+| 不可变性 | 语言级别保证（字段 final） | 编译时生成 final 字段 |
+| 访问器方法 | `x()`（无 get 前缀） | `getX()`（有 get 前缀） |
+| equals/hashCode | 基于所有组件 | 基于所有非静态字段 |
+| 自定义 | 紧凑构造函数、自定义方法 | `@EqualsAndHashCode.Exclude` 等注解 |
+| 继承 | 不能继承其他类（但可以实现接口） | 可以继承其他类 |
+| 构造函数 | 标准构造函数 + 紧凑构造函数 | `@AllArgsConstructor` |
+| 空值处理 | 不处理 null | `@NonNull` 注解 |
+| 兼容性 | Java 14+ | Java 8+ |
+| 适用场景 | 纯数据载体，JDK 原生 | 需要更多灵活性时 |
+
+```java
+// Lombok @Value 等价的 record
+// @Value
+// public class Point {
+//     int x;
+//     int y;
+// }
+// 等价于：
+public record Point(int x, int y) {}
+```
+
+## Sealed Class——密封类（Java 15+）
+
+### 密封类的概念与模式匹配
+
+```java
+// sealed：精确控制哪些类可以继承/实现
+// permits：列出允许的子类（必须在同一个模块或包中）
+public sealed interface Shape
+    permits Circle, Rectangle, Triangle {
+    double area();
+}
+
+// 子类必须用 final、sealed 或 non-sealed 三个修饰符之一
+public record Circle(double radius) implements Shape {
+    @Override
+    public double area() { return Math.PI * radius * radius; }
+}
+// Circle 是 final——不能再被继承
+
+public sealed class Rectangle implements Shape permits Square {
+    private final double width;
+    private final double height;
+    
+    public Rectangle(double width, double height) {
+        this.width = width;
+        this.height = height;
+    }
+    
+    @Override
+    public double area() { return width * height; }
+    public double width() { return width; }
+    public double height() { return height; }
+}
+// Rectangle 是 sealed——只能被 Square 继承
+
+public non-sealed record Square(double side) extends Rectangle(side, side) {
+    // non-sealed——开放继承，任何人都可以继承 Square
+}
+
+public record Triangle(double base, double height) implements Shape {
+    @Override
+    public double area() { return 0.5 * base * height; }
+}
+```
+
+### 密封类的继承层次
+
+```mermaid
+graph TD
+    S["sealed interface Shape<br/>permits Circle, Rectangle, Triangle"]
+    
+    C["final record Circle<br/>不能再被继承"]
+    R["sealed class Rectangle<br/>permits Square"]
+    T["final record Triangle<br/>不能再被继承"]
+    
+    SQ["non-sealed record Square<br/>继承 Rectangle<br/>可以再被继承"]
+    
+    S --> C
+    S --> R
+    S --> T
+    R --> SQ
+    
+    style S fill:#e1f5fe
+    style C fill:#c8e6c9
+    style R fill:#fff3e0
+    style T fill:#c8e6c9
+    style SQ fill:#fce4ec
+```
+
+### 密封类 + 模式匹配的威力
+
+```java
+// 密封类最大的价值：配合模式匹配实现穷举检查
+// 编译器知道 Shape 只有 Circle、Rectangle、Triangle 三种子类型
+
+// Java 17+：switch 穷举检查，不需要 default
+double area = switch (shape) {
+    case Circle c -> c.area();
+    case Rectangle r -> r.area();
+    case Triangle t -> t.area();
+    // 编译器确认所有子类型都已处理，不需要 default
+    // 如果将来新增子类型，编译器会报错——编译时就能发现问题
+};
+
+// Java 21+：record patterns 解构
+String desc = switch (shape) {
+    case Circle(var r) when r > 10 -> "大圆（r=" + r + "）";
+    case Circle(var r)             -> "小圆（r=" + r + "）";
+    case Rectangle(var w, var h)   -> w == h ? "正方形" : "矩形";
+    case Triangle(var b, var h)    -> "三角形（底=" + b + "，高=" + h + "）";
+};
+```
+
+## 对象内存布局
+
+### JVM 中对象的内存结构
+
+每个 Java 对象在堆内存中的布局由三部分组成：
+
+```mermaid
+graph TD
+    subgraph "Java 对象内存布局"
+        direction TB
+        HEADER["对象头<br/>（Object Header）"]
+        INST["实例数据<br/>（Instance Data）"]
+        PAD["对齐填充<br/>（Padding）"]
+    end
+    
+    subgraph "对象头详情"
+        direction LR
+        MW["Mark Word<br/>8 字节<br/>GC 年龄、锁状态<br/>Hash Code、线程 ID"]
+        KP["类型指针<br/>（Klass Pointer）<br/>4 字节（压缩）/ 8 字节<br/>指向类元数据"]
+        ARRAY["数组长度<br/>4 字节<br/>仅数组对象有"]
+    end
+    
+    HEADER --- MW
+    HEADER --- KP
+    HEADER -.->|仅数组| ARRAY
+    INST --- F1["字段 1<br/>（父类字段在前）"]
+    INST --- F2["字段 2"]
+    INST --- F3["字段 3<br/>（子类字段在后）"]
+    PAD --- P1["填充到 8 的倍数<br/>保证 CPU 高效访问"]
+    
+    style HEADER fill:#e1f5fe
+    style MW fill:#fff3e0
+    style KP fill:#fff3e0
+    style ARRAY fill:#fff3e0
+    style INST fill:#e8f5e9
+    style PAD fill:#f5f5f5
+```
+
+#### 对象头（Object Header）
+
+```java
+// 对象头 = Mark Word + 类型指针（+ 数组长度，仅数组对象）
+
+// Mark Word（8 字节）存储的信息：
+// - Hash Code（延迟计算，第一次调用 hashCode() 时才写入）
+// - GC 年龄（每经历一次 Minor GC 且存活，年龄 +1，达到阈值晋升老年代）
+// - 锁状态标志位（无锁、偏向锁、轻量级锁、重量级锁、GC 标记）
+// - 线程持有的锁指针（偏向线程 ID）
+// - 线程 ID
+
+// 类型指针（4/8 字节）：
+// - 指向方法区中的类元数据（Klass）
+// - JVM 通过这个指针确定对象是哪个类的实例
+// - 开启指针压缩（默认开启）时为 4 字节，否则 8 字节
+
+// 数组长度（4 字节）：
+// - 只有数组对象才有
+// - 记录数组长度
+```
+
+#### 实例数据（Instance Data）
+
+```java
+public class Example {
+    // 字段在内存中的排列顺序（不是源码中的声明顺序）：
+    // 1. longs/doubles（8 字节）
+    // 2. ints/floats（4 字节）
+    // 3. shorts/chars（2 字节）
+    // 4. bytes/booleans（1 字节）
+    // 5. 引用类型（4/8 字节）
+    // 这个顺序是为了内存对齐，减少填充浪费
+    
+    long a;     // 偏移量 12（对象头 12 字节）
+    double b;   // 偏移量 20
+    int c;      // 偏移量 28
+    float d;    // 偏移量 32
+    short e;    // 偏移量 36
+    char f;     // 偏移量 38
+    byte g;     // 偏移量 40
+    boolean h;  // 偏移量 41
+    Object ref; // 偏移量 44（指针压缩时 4 字节）
+    // 填充到 48 字节（8 的倍数）
+}
+
+// 使用 JOL（Java Object Layout）工具查看实际布局：
+// jvm -jar jol-cli.jar internals java.lang.Object
+```
+
+#### 对齐填充（Padding）
+
+```
+为什么需要对齐填充？
+- HotSpot VM 的内存管理要求对象大小必须是 8 字节的整数倍
+- 如果实例数据部分的大小不是 8 的倍数，需要填充到 8 的倍数
+- CPU 读取对齐的内存地址更快（硬件层面）
+- 对象大小 = 对象头 + 实例数据 + 对齐填充
+
+示例：
+- 空对象（无字段）：对象头 12 字节 + 填充 4 字节 = 16 字节
+- 一个 int 字段的对象：对象头 12 + int 4 = 16 字节（刚好，不需要填充）
+- 一个 boolean 字段的对象：对象头 12 + boolean 1 + 填充 3 = 16 字节
 ```
 
 ## SOLID 原则——一句话 + 一个例子
@@ -565,6 +1289,14 @@ HashMap 通过 hashCode 确定桶位置，通过 equals 判断是否同一个 ke
 **Q4：为什么 String 要设计成不可变的？**
 
 四个原因：字符串常量池安全（一个修改不影响所有引用）、HashMap key 安全（不可变对象的 hash 不变）、线程安全（无需同步）、安全敏感场景（如数据库连接字符串、文件路径不能被篡改）。
+
+**Q5：内部类有哪些类型？各自有什么特点？**
+
+四种：成员内部类（持有外部类引用，可访问所有成员）、静态内部类（不持有外部类引用，只能访问 static 成员，最安全）、局部内部类（定义在方法内，只能访问 effectively final 的局部变量）、匿名内部类（没有名字，一次性使用，Lambda 的前身）。长期存活的内部类一定要用 static，否则会导致外部类内存泄漏。
+
+**Q6：枚举实现单例为什么比双重检查锁好？**
+
+三个原因：枚举天然防止反射攻击（Enum 构造函数由 JVM 保护）、天然防止序列化攻击（反序列化返回已有实例）、线程安全（类加载时初始化，无需额外同步）。双重检查锁需要处理指令重排序（volatile）、反射攻击、序列化攻击等问题。
 
 ## 延伸阅读
 

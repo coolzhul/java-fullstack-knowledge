@@ -20,4 +20,5 @@ export default navbar([
   { text: "分布式", icon: "mdi:network", link: "/distributed/" },
   { text: "开发工具", icon: "mdi:tools", link: "/tools/" },
   { text: "架构设计", icon: "mdi:office-building-cog", link: "/architecture/" },
+  { text: "面试题库", icon: "mdi:clipboard-text", link: "/interview/" },
 ]);
