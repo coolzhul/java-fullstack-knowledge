@@ -285,6 +285,62 @@ graph TD
 0.75 是时间和空间的平衡点。太低空间浪费，太高哈希冲突严重。根据泊松分布，0.75 时链表长度达到 8 的概率极低（约 0.00000006），所以转红黑树的阈值设为 8。
 :::
 
+### HashMap 红黑树深入
+
+当链表长度 ≥ 8 且数组长度 ≥ 64 时，HashMap 会将链表转为红黑树。红黑树是一种自平衡二叉搜索树，保证最坏情况下查找时间从 O(n) 降到 O(log n)。
+
+#### 红黑树的五大性质
+
+1. 每个节点是红色或黑色
+2. 根节点是黑色
+3. 叶子节点（NIL）是黑色
+4. 红色节点的两个子节点必须是黑色（不能有连续红节点）
+5. 从任一节点到其每个叶子的所有路径都包含相同数目的黑色节点
+
+#### 红黑树插入流程
+
+```mermaid
+graph TD
+    A["将新节点插入为红色叶子"] --> B{"父节点是红色？"}
+    B -->|"否"| C["插入完成<br/>不需要调整"]
+    B -->|"是"| D{"叔节点是红色？"}
+    D -->|"是"| E["变色：父变黑<br/>叔变黑<br/>祖父变红"]
+    E --> F["以祖父为当前节点<br/>继续向上调整"]
+    F --> B
+    D -->|"否（叔为黑或 null）"| G{"当前节点是<br/>右子树？"}
+    G -->|"是"| H["左旋：变为左子树情况"]
+    H --> I
+    G -->|"否"| I["变色 + 右旋<br/>父变黑，祖父变红<br/>对祖父左旋"]
+    I --> C
+```
+
+#### 红黑树删除流程
+
+删除比插入复杂得多。核心思想是：删除后如果破坏了红黑性质，通过"变色 + 旋转"来修复。
+
+```mermaid
+graph TD
+    A["删除节点"] --> B{"被删节点是红色？"}
+    B -->|"是"| C["直接删除<br/>不影响红黑性质"]
+    B -->|"否（黑色）"| D["用子节点替代（若有）<br/>替代节点标记为"双黑""]
+    D --> E{"兄弟节点是红色？"}
+    E -->|"是"| F["兄弟变黑，父变红<br/>对父旋转"]
+    F --> G
+    E -->|"否"| G{"兄弟的两个侄子都是黑？"}
+    G -->|"是"| H["兄弟变红<br/>双黑上移到父节点"]
+    H --> I{"到达根节点？"}
+    I -->|"是"| J["结束：去掉双黑标记"]
+    I -->|"否"| D
+    G -->|"否"| K{"被删在左子树？<br/>且左侄为红？"}
+    K -->|"是"| L["兄弟变父色，父变黑<br/>左侄变黑，对兄弟右旋"]
+    L --> M["兄弟变父色，父变黑<br/>右侄变黑，对父左旋<br/>去掉双黑标记"]
+    K -->|"否"| N["兄弟变父色，父变黑<br/>右侄变黑，对父左旋<br/>去掉双黑标记"]
+```
+
+::: tip HashMap 的红黑树 vs TreeMap 的红黑树
+HashMap 的红黑树节点同时维护了链表的 `next` 指针（双向链表），在树节点数量 ≤ 6 时会退化为链表。TreeMap 的红黑树是纯粹的红黑树，不做退化。HashMap 的红黑树实现比 TreeMap 更复杂，因为要兼顾链表和树两种结构。
+:::
+
 ### HashMap 为什么线程不安全？
 
 ```java
@@ -319,6 +375,399 @@ public class LRUCache<K, V> extends LinkedHashMap<K, V> {
     @Override
     protected boolean removeEldestEntry(Map.Entry<K, V> eldest) {
         return size() > maxSize;  // 超出容量移除最久未访问的
+    }
+}
+```
+
+### TreeMap——红黑树排序
+
+TreeMap 的所有 key 按照自然顺序或自定义 Comparator 排序，底层是一棵纯红黑树。
+
+```java
+// 自然排序（key 实现 Comparable）
+TreeMap<String, Integer> treeMap = new TreeMap<>();
+treeMap.put("Charlie", 3);
+treeMap.put("Alice", 1);
+treeMap.put("Bob", 2);
+System.out.println(treeMap);  // {Alice=1, Bob=2, Charlie=3}（按字典序）
+
+// 自定义排序（传入 Comparator）
+TreeMap<String, Integer> descMap = new TreeMap<>(Comparator.reverseOrder());
+descMap.put("Charlie", 3);
+descMap.put("Alice", 1);
+descMap.put("Bob", 2);
+System.out.println(descMap);  // {Charlie=3, Bob=2, Alice=1}（降序）
+
+// 复杂排序：按字符串长度
+TreeMap<String, Integer> lenMap = new TreeMap<>(Comparator.comparingInt(String::length));
+lenMap.put("abc", 1);
+lenMap.put("de", 2);
+lenMap.put("fghi", 3);
+System.out.println(lenMap);  // {de=2, abc=1, fghi=3}（按长度排序）
+
+// 常用操作
+treeMap.firstKey();       // 最小的 key
+treeMap.lastKey();        // 最大的 key
+treeMap.headMap("Bob");   // 小于 "Bob" 的子 Map
+treeMap.tailMap("Bob");   // 大于等于 "Bob" 的子 Map
+treeMap.subMap("A", "C"); // A ≤ key < C 的子 Map
+```
+
+#### Comparable vs Comparator
+
+```java
+// 方式1：实现 Comparable 接口（自然排序）
+public class User implements Comparable<User> {
+    private String name;
+    private int age;
+
+    @Override
+    public int compareTo(User other) {
+        // 先按年龄排序，年龄相同按名字排序
+        int cmp = Integer.compare(this.age, other.age);
+        return cmp != 0 ? cmp : this.name.compareTo(other.name);
+    }
+}
+
+// 方式2：使用 Comparator（自定义排序，不影响类本身）
+Comparator<User> byName = Comparator.comparing(User::getName);
+Comparator<User> byAgeDesc = Comparator.comparingInt(User::getAge).reversed();
+// 组合排序：先按年龄降序，年龄相同按名字升序
+Comparator<User> combined = Comparator.comparingInt(User::getAge)
+                                      .reversed()
+                                      .thenComparing(User::getName);
+```
+
+::: tip 什么时候用 TreeMap？
+需要 key 有序（范围查询、排序遍历），且性能要求不是极端高时。TreeMap 的 put/get 是 O(log n)，HashMap 是 O(1)。如果只需要有序遍历而不需要范围查询，用 `HashMap` + `stream().sorted()` 可能更简单。
+:::
+
+### HashSet——完全依赖 HashMap
+
+HashSet 的实现极其简单——内部就是包装了一个 HashMap，key 存元素，value 是一个固定的 PRESENT 对象：
+
+```java
+// JDK 源码（简化）
+public class HashSet<E> implements Set<E> {
+    private transient HashMap<E, Object> map;
+    private static final Object PRESENT = new Object();  // 哑值
+
+    public HashSet() {
+        map = new HashMap<>();
+    }
+
+    public boolean add(E e) {
+        return map.put(e, PRESENT) == null;  // key 存在则返回 false
+    }
+
+    public boolean remove(Object o) {
+        return map.remove(o) == PRESENT;
+    }
+
+    public boolean contains(Object o) {
+        return map.containsKey(o);
+    }
+
+    public int size() {
+        return map.size();
+    }
+}
+```
+
+所以 HashSet 的所有特性（去重原理、扩容、红黑树转换）都和 HashMap 完全一致。理解了 HashMap 就理解了 HashSet。
+
+LinkedHashSet 继承 HashSet，内部用 LinkedHashMap 保持插入顺序：
+
+```java
+public class LinkedHashSet<E> extends HashSet<E> {
+    public LinkedHashSet() {
+        super(new LinkedHashMap<>());  // 注意：调用的是带 map 参数的构造器
+    }
+}
+```
+
+## Queue 与 Deque——队列和双端队列
+
+### Queue 接口
+
+```java
+Queue<String> queue = new LinkedList<>();
+queue.offer("A");  // 添加到尾部（推荐，失败返回 false）
+queue.offer("B");
+queue.offer("C");
+
+queue.poll();    // 移除并返回头部（空返回 null）
+queue.peek();    // 查看头部不移除（空返回 null）
+// queue.remove(); // 移除头部（空抛异常）
+// queue.element(); // 查看头部（空抛异常）
+```
+
+### PriorityQueue——堆结构
+
+PriorityQueue 是一个**最小堆**（默认），每次 `poll()` 返回最小的元素。
+
+```java
+// 默认最小堆
+PriorityQueue<Integer> minHeap = new PriorityQueue<>();
+minHeap.offer(5);
+minHeap.offer(1);
+minHeap.offer(3);
+minHeap.poll();  // 1（最小的）
+minHeap.poll();  // 3
+
+// 最大堆：传入反向 Comparator
+PriorityQueue<Integer> maxHeap = new PriorityQueue<>(Comparator.reverseOrder());
+maxHeap.offer(5);
+maxHeap.offer(1);
+maxHeap.offer(3);
+maxHeap.poll();  // 5（最大的）
+
+// 自定义优先级：按字符串长度
+PriorityQueue<String> pq = new PriorityQueue<>(Comparator.comparingInt(String::length));
+pq.offer("hello");
+pq.offer("hi");
+pq.offer("good morning");
+pq.poll();  // "hi"（最短）
+```
+
+PriorityQueue 底层是一个**完全二叉树**，用数组存储。插入和删除都是 O(log n)：
+
+```
+堆的数组表示（最小堆）：
+       1
+      / \
+     3   5
+    /
+   4
+
+数组：[1, 3, 5, 4]
+索引关系（0-based）：
+- 父节点：parent = (i - 1) / 2
+- 左子节点：left = 2 * i + 1
+- 右子节点：right = 2 * i + 2
+```
+
+### ArrayDeque——环形数组
+
+ArrayDeque 是 Java 中最高效的 Deque 实现，底层用**环形数组**，没有链表节点的内存开销。
+
+```java
+Deque<String> deque = new ArrayDeque<>();
+deque.addFirst("B");  // 头部添加
+deque.addLast("C");   // 尾部添加
+deque.addFirst("A");  // 头部添加
+
+deque.pollFirst();  // A
+deque.pollLast();   // C
+
+// 用作栈（比 Stack 更高效）
+deque.push("X");    // 等同于 addFirst
+deque.pop();        // 等同于 removeFirst
+```
+
+```mermaid
+graph LR
+    subgraph "ArrayDeque 环形数组（容量 8）"
+        direction LR
+        A["[4] A"] --> B["[5] B"]
+        B --> C["[6] C"]
+        C --> D["[7] 空"]
+        D -->|"head=4<br/>tail=7"| E["[0] 空"]
+        E --> F["[1] 空"]
+        F --> G["[2] 空"]
+        G --> H["[3] 空"]
+    end
+```
+
+::: tip ArrayDeque vs LinkedList
+ArrayDeque 用环形数组实现，没有节点分配/回收开销，CPU 缓存友好，性能全面优于 LinkedList。**作为栈或双端队列时，优先选 ArrayDeque**。LinkedList 的唯一优势是实现了 List 接口（可以按索引访问），但这个"优势"很少真正需要。
+:::
+
+## Map 实现对比
+
+| 特性 | HashMap | LinkedHashMap | TreeMap | ConcurrentHashMap | Hashtable |
+|------|---------|---------------|---------|-------------------|-----------|
+| 底层结构 | 数组+链表+红黑树 | 数组+链表+红黑树+双向链表 | 红黑树 | 数组+链表+红黑树 | 数组+链表 |
+| put 时间复杂度 | O(1) | O(1) | O(log n) | O(1) | O(1) |
+| get 时间复杂度 | O(1) | O(1) | O(log n) | O(1) | O(1) |
+| key 有序 | ❌ | ✅ 插入顺序 | ✅ 排序顺序 | ❌ | ❌ |
+| 空间开销 | 较低 | 中等（维护链表） | 较高（树节点） | 较低 | 较低 |
+| 线程安全 | ❌ | ❌ | ❌ | ✅ | ✅ |
+| null key/value | ✅ | ✅ | ❌ key 不能为 null | ❌ | ❌ |
+| 适用场景 | 通用，最高性能 | 需要保持插入/访问顺序 | 需要 key 有序 | 多线程 | 遗留代码，不推荐 |
+
+## Collections 工具类
+
+`java.util.Collections` 提供了大量集合操作的工具方法：
+
+```java
+// 排序
+List<Integer> nums = new ArrayList<>(Arrays.asList(3, 1, 4, 1, 5));
+Collections.sort(nums);                              // 自然排序
+Collections.sort(nums, Comparator.reverseOrder());   // 自定义排序
+
+// 二分查找（必须先排序！）
+int index = Collections.binarySearch(nums, 4);  // 返回索引，找不到返回负数
+
+// 不可变集合（返回的集合不能修改，修改抛 UnsupportedOperationException）
+List<String> immutable = Collections.unmodifiableList(new ArrayList<>(list));
+Set<String> immutableSet = Collections.unmodifiableSet(new HashSet<>(set));
+Map<String, Integer> immutableMap = Collections.unmodifiableMap(new HashMap<>(map));
+
+// 线程安全包装（返回的集合是线程安全的视图）
+List<String> syncList = Collections.synchronizedList(new ArrayList<>());
+Map<String, Integer> syncMap = Collections.synchronizedMap(new HashMap<>());
+// ⚠️ 迭代时仍需手动同步：
+// synchronized (syncList) { for (String s : syncList) { ... } }
+
+// 填充
+Collections.fill(nums, 0);           // 所有元素设为 0
+Collections.addAll(list, "X", "Y");  // 批量添加
+Collections.frequency(list, "A");    // 出现次数
+Collections.max(nums);               // 最大值
+Collections.min(nums);               // 最小值
+Collections.reverse(nums);           // 反转
+Collections.shuffle(nums);           // 随机打乱
+```
+
+::: warning 不可变集合 vs 线程安全集合
+`unmodifiableList` 返回的集合**不能修改**（写入时抛异常），适合传递给不信任的代码。`synchronizedList` 返回的集合**可以修改**，但所有操作都是线程安全的（用 synchronized）。如果你只需要读，用 unmodifiable；如果需要多线程读写，直接用 `ConcurrentHashMap` / `CopyOnWriteArrayList`。
+:::
+
+## Java 9+ 集合工厂方法
+
+Java 9 引入了 `List.of()`、`Set.of()`、`Map.of()` 等工厂方法，创建不可变集合更简洁：
+
+```java
+// Java 9+ 不可变集合
+List<String> list = List.of("A", "B", "C");
+Set<String> set = Set.of("A", "B", "C");
+Map<String, Integer> map = Map.of(
+    "Alice", 25,
+    "Bob", 30
+);
+
+// 不可变性保证：
+// list.add("D");  // UnsupportedOperationException
+// list.set(0, "X");  // UnsupportedOperationException
+// list.remove(0);  // UnsupportedOperationException
+
+// ⚠️ 注意：不允许 null 元素
+// List.of("A", null);  // NullPointerException！
+
+// Map 超过 10 个 key-value 对时，用 Map.ofEntries()
+Map<String, Integer> bigMap = Map.ofEntries(
+    Map.entry("A", 1),
+    Map.entry("B", 2),
+    Map.entry("C", 3)
+    // ... 任意数量
+);
+```
+
+::: tip 工厂方法 vs Collections.unmodifiableList
+`List.of()` 创建的是**结构化不可变**的集合：底层实现是专门的不可变类，比包装可变集合更节省内存、更快。`new ArrayList<>().stream().toList()`（Java 16+）也是不可变的。
+:::
+
+## Stream 高级用法
+
+### 并行流
+
+```java
+// 串行流（默认）
+long count = list.stream().filter(x -> x > 0).count();
+
+// 并行流：利用 ForkJoinPool 多线程处理
+long parallelCount = list.parallelStream().filter(x -> x > 0).count();
+
+// 也可以将串行流转为并行流
+long count2 = list.stream().parallel().filter(x -> x > 0).count();
+```
+
+::: warning 并行流的坑
+1. **线程安全**：lambda 中不要修改共享状态，否则数据竞争
+2. **顺序依赖**：`forEach` 不保证顺序，用 `forEachOrdered` 保证
+3. **性能不总是提升**：数据量小、操作简单时，并行开销 > 收益
+4. **底层用 ForkJoinPool.commonPool()**，默认线程数 = CPU 核数，不要在并行流中做阻塞操作
+:::
+
+### Collect 收集器
+
+```java
+// 收集为 List
+List<String> names = users.stream()
+    .map(User::getName)
+    .collect(Collectors.toList());  // Java 16+: .toList()
+
+// 收集为 Set
+Set<String> uniqueNames = users.stream()
+    .map(User::getName)
+    .collect(Collectors.toSet());
+
+// 收集为 Map
+Map<String, Integer> nameToAge = users.stream()
+    .collect(Collectors.toMap(
+        User::getName,       // key
+        User::getAge,        // value
+        (oldVal, newVal) -> newVal  // key 冲突时保留新值
+    ));
+
+// 分组
+Map<String, List<User>> byCity = users.stream()
+    .collect(Collectors.groupingBy(User::getCity));
+
+// 分组 + 计数
+Map<String, Long> countByCity = users.stream()
+    .collect(Collectors.groupingBy(User::getCity, Collectors.counting()));
+
+// 分区（二分组）
+Map<Boolean, List<User>> partitioned = users.stream()
+    .collect(Collectors.partitioningBy(u -> u.getAge() >= 18));
+
+// 拼接字符串
+String allNames = users.stream()
+    .map(User::getName)
+    .collect(Collectors.joining(", "));  // "Alice, Bob, Charlie"
+
+// 统计信息
+IntSummaryStatistics stats = users.stream()
+    .collect(Collectors.summarizingInt(User::getAge));
+stats.getAverage();  // 平均年龄
+stats.getMax();      // 最大年龄
+stats.getMin();      // 最小年龄
+stats.getSum();      // 总和
+stats.getCount();    // 数量
+```
+
+### 自定义 Collector
+
+```java
+// 自定义 Collector：将字符串流收集为单个拼接字符串（带前缀和后缀）
+import java.util.stream.*;
+import java.util.function.*;
+import java.util.*;
+
+public class CustomCollector {
+
+    public static Collector<String, StringBuilder, String> joiner(String prefix, String suffix, String delimiter) {
+        return Collector.of(
+            // supplier：创建容器
+            StringBuilder::new,
+            // accumulator：如何添加元素
+            (sb, s) -> {
+                if (sb.length() > prefix.length()) sb.append(delimiter);
+                sb.append(s);
+            },
+            // combiner：并行流时合并两个容器
+            StringBuilder::append,
+            // finisher：最终转换
+            sb -> new StringBuilder(prefix).append(sb).append(suffix).toString()
+        );
+    }
+
+    public static void main(String[] args) {
+        String result = Stream.of("A", "B", "C")
+            .collect(joiner("[", "]", ", "));
+        System.out.println(result);  // [A, B, C]
     }
 }
 ```
@@ -379,6 +828,14 @@ Map<String, User> map = new HashMap<>(128);  // 避免扩容
 **Q4：ConcurrentHashMap JDK 7 和 JDK 8 的区别？**
 
 JDK 7：分段锁（Segment），默认 16 个 Segment，最多 16 个线程并发。JDK 8：CAS + synchronized，锁粒度从 Segment 级别降到桶级别（Node），并发度等于桶的数量。扩容时支持多线程协同。
+
+**Q5：HashSet 的底层实现？**
+
+HashSet 内部完全依赖 HashMap。add(e) 实际上是 map.put(e, PRESENT)，contains(e) 实际上是 map.containsKey(e)。所有特性（去重、扩容、红黑树转换）都来自 HashMap。LinkedHashSet 用 LinkedHashMap 保持插入顺序。
+
+**Q6：PriorityQueue 的底层原理？**
+
+PriorityQueue 底层是一个最小堆（完全二叉树），用数组存储。插入时 siftUp 上浮到合适位置，删除时用最后一个元素替换堆顶然后 siftDown 下沉。插入和删除都是 O(log n)，查看堆顶是 O(1)。
 
 ## 延伸阅读
 

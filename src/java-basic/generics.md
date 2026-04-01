@@ -81,6 +81,200 @@ public <T> T create(Class<T> clazz) throws Exception {
 为了向后兼容。JDK 5 引入泛型时，需要让新旧代码能互操作。泛型信息被擦除后，编译后的 class 文件和 JDK 5 之前的代码完全兼容。这是 Java"兼容性至上"哲学的典型体现。
 :::
 
+#### 类型擦除的底层原理——Signature 属性
+
+虽然泛型在运行时被擦除了，但 Java 并没有完全丢弃泛型信息。编译器会在字节码中保留一个 **Signature 属性**，记录原始的泛型签名，供反射使用。
+
+```java
+// 编译下面的类
+public class GenericDemo {
+    public List<String> names;
+    public Map<String, Integer> ages;
+}
+```
+
+通过 `javap -v` 查看，可以看到字节码中包含 Signature 属性：
+
+```
+  // names 字段
+  private java.util.List names;
+    descriptor: Ljava/util/List;
+    Signature: #7                           // Ljava/util/List<Ljava/lang/String;>;
+
+  // ages 字段
+  private java.util.Map ages;
+    descriptor: Ljava/util/Map;
+    Signature: #9                           // Ljava/util/Map<Ljava/lang/String;Ljava/lang/Integer;>;
+```
+
+- **descriptor**：擦除后的类型（`List`、`Map`），运行时实际使用
+- **Signature**：保留的泛型签名（`List<String>`、`Map<String, Integer>`），供反射读取
+
+```mermaid
+graph LR
+    A["Java 源码<br/>List&lt;String&gt;"] -->|"javac 编译"| B["字节码<br/>descriptor: List<br/>Signature: List&lt;String&gt;"]
+    B -->|"JVM 加载运行"| C["运行时类型<br/>List（擦除后）"]
+    B -->|"反射读取"| D["获取泛型信息<br/>getGenericSuperclass()<br/>ParameterizedType"]
+```
+
+反射可以通过 `getGenericReturnType()`、`getGenericParameterTypes()` 等方法读取 Signature：
+
+```java
+import java.lang.reflect.*;
+import java.util.*;
+
+public class ReflectionGeneric {
+    public Map<String, Integer> getMap() { return null; }
+
+    public static void main(String[] args) throws Exception {
+        Method method = ReflectionGeneric.class.getMethod("getMap");
+
+        // getReturnType() 返回擦除后的类型
+        Class<?> returnType = method.getReturnType();
+        System.out.println(returnType);  // interface java.util.Map
+
+        // getGenericReturnType() 返回带泛型的类型
+        Type genericType = method.getGenericReturnType();
+        System.out.println(genericType);  // java.util.Map<java.lang.String, java.lang.Integer>
+
+        if (genericType instanceof ParameterizedType pt) {
+            // 获取实际类型参数
+            Type[] typeArgs = pt.getActualTypeArguments();
+            System.out.println("Key: " + typeArgs[0]);    // class java.lang.String
+            System.out.println("Value: " + typeArgs[1]);  // class java.lang.Integer
+        }
+    }
+}
+```
+
+::: warning 注意边界
+Signature 只在类、字段、方法的声明处保留。局部变量的泛型信息（如方法内 `List<String> list = ...`）不会被保留到字节码中，运行时无法通过反射获取。
+:::
+
+#### TypeToken——绕过类型擦除的经典技巧
+
+既然泛型被擦除了，运行时怎么拿到 `List<String>` 的类型？答案是 **匿名内部类 + 反射**：
+
+```java
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
+
+/**
+ * 模拟 Guava TypeToken 的核心原理
+ * 利用匿名内部类在编译时保留泛型签名，通过反射在运行时获取
+ */
+public abstract class TypeReference<T> {
+
+    private final Type type;
+
+    protected TypeReference() {
+        // 获取当前类的父类的泛型类型参数
+        // 例如 new TypeReference<List<String>>() {}
+        // getGenericSuperclass() 返回 TypeReference<List<String>>
+        // getActualTypeArguments()[0] 返回 List<String>
+        Type superClass = getClass().getGenericSuperclass();
+        if (superClass instanceof ParameterizedType pt) {
+            this.type = pt.getActualTypeArguments()[0];
+        } else {
+            throw new RuntimeException("Missing type parameter.");
+        }
+    }
+
+    public Type getType() {
+        return type;
+    }
+}
+```
+
+使用示例：
+
+```java
+// 创建匿名内部类，泛型信息被保留在父类的 Signature 中
+TypeReference<List<String>> stringListType = new TypeReference<List<String>>() {};
+System.out.println(stringListType.getType());
+// 输出：java.util.List<java.lang.String>
+
+TypeReference<Map<String, Integer>> mapType = new TypeReference<Map<String, Integer>>() {};
+System.out.println(mapType.getType());
+// 输出：java.util.Map<java.lang.String, java.lang.Integer>
+```
+
+::: tip 为什么必须是匿名内部类？
+`new TypeReference<List<String>>() {}` 创建了一个继承自 `TypeReference<List<String>>` 的匿名内部类。编译器必须把这个泛型信息写入 class 文件的 Signature 属性，否则父类无法正确链接。这就是"搭便车"——我们利用编译器必须保留父类泛型签名的机制，间接保留了子类传入的类型参数。
+:::
+
+### 泛型边界——约束类型参数的范围
+
+#### 单一边界
+
+```java
+// T 必须是 Number 或其子类，这样就可以调用 Number 的方法
+public static <T extends Number> double sum(List<T> list) {
+    double total = 0;
+    for (T num : list) {
+        total += num.doubleValue();  // ✅ 可以调用 Number 的方法
+    }
+    return total;
+}
+```
+
+#### 多重边界（Multiple Bounds）
+
+Java 支持为类型参数指定多个上界，用 `&` 连接：
+
+```java
+// T 必须同时满足 Number 和 Serializable
+public static <T extends Number & Serializable> void process(T value) {
+    double d = value.doubleValue();        // ✅ Number 的方法
+    // 可以安全地序列化 value（因为实现了 Serializable）
+}
+
+// ⚠️ 注意：类必须放在第一个，接口放在后面
+// <T extends Serializable & Number>  // ❌ 编译错误！类 Number 必须在前面
+// <T extends Number & Serializable>  // ✅ 正确
+```
+
+多重边界的擦除规则：**擦除到第一个边界的类型**。
+
+```java
+// <T extends Number & Serializable> 擦除后变成 Number（不是 Object）
+// 这意味着你可以调用 Number 的方法而不需要强转
+
+public class MultiBound<T extends Number & Serializable> {
+    private T value;
+    // 擦除后：private Number value;
+    // 而不是 private Object value;
+}
+```
+
+#### 自限定类型（Self-Bound Generics）
+
+`<T extends Comparable<T>>` 是一种非常常见的泛型模式——类型参数本身必须能与自己比较：
+
+```java
+// 自限定类型：T 必须实现 Comparable<T>，即 T 必须能和 T 类型的对象比较
+public static <T extends Comparable<T>> T max(List<T> list) {
+    if (list.isEmpty()) throw new IllegalArgumentException("empty list");
+
+    T max = list.get(0);
+    for (int i = 1; i < list.size(); i++) {
+        if (list.get(i).compareTo(max) > 0) {  // ✅ 可以调用 compareTo(T)
+            max = list.get(i);
+        }
+    }
+    return max;
+}
+
+// 使用
+List<Integer> nums = Arrays.asList(3, 1, 4, 1, 5);
+System.out.println(max(nums));  // 5
+
+List<String> names = Arrays.asList("Charlie", "Alice", "Bob");
+System.out.println(max(names));  // Charlie（字典序最大）
+```
+
+自限定类型在 Java 标准库中大量使用：`Comparable<T>`、`Enum<E extends Enum<E>>`、`Comparable<? super T>` 等。
+
 ### PECS 原则——泛型通配符的核心法则
 
 这是《Effective Java》中最经典的法则之一，搞懂了它就搞懂了泛型通配符：
@@ -126,6 +320,137 @@ addNumbers(numbers);
 如果你的方法既要从集合中读取，又要向集合中写入，那就**不要用通配符**，直接用精确类型 `List<T>`。通配符的代价就是丧失某一方向的操作能力。
 :::
 
+#### PECS 决策流程图
+
+```mermaid
+graph TD
+    A["你需要操作一个泛型集合"] --> B{"是否需要写入？"}
+    B -->|"是"| C{"是否需要读取？"}
+    B -->|"否（只读）"| D["使用 &lt;? extends T&gt;<br/>Producer Extends"]
+    C -->|"是"| E["不要用通配符<br/>直接用 &lt;T&gt;"]
+    C -->|"否（只写）"| F["使用 &lt;? super T&gt;<br/>Consumer Super"]
+    D --> G["示例：集合排序的参数<br/>Collections.sort(List&lt;? extends T&gt;)"]
+    F --> H["示例：向集合添加元素<br/>Collections.addAll(List&lt;? super T&gt;, T...)"]
+    E --> I["示例：同时读写<br/>void swap(List&lt;T&gt;, int, int)"]
+```
+
+### 通配符捕获（Wildcard Capture）
+
+通配符 `?` 的一个限制是你不能把数据写入 `?` 类型的集合（除了 null）。但有时候你确实需要临时操作它，这时候可以用 **捕获辅助方法**：
+
+```java
+// 问题：你想交换一个通配符列表中的两个元素
+// 但你无法向 List<?> 中写入任何非 null 的值
+public static void swap(List<?> list, int i, int j) {
+    // list.set(i, list.get(j));  // ❌ 编译错误！不能向 List<?> 写入
+    swapHelper(list, i, j);       // ✅ 通过捕获辅助方法
+}
+
+// 捕获辅助方法：用一个具名类型参数 T 来"捕获" ?
+private static <T> void swapHelper(List<T> list, int i, int j) {
+    list.set(i, list.get(j));  // ✅ T 是具体类型，可以读写
+    list.set(j, list.get(i));  // 需要用临时变量避免覆盖
+}
+
+// 更安全的 swapHelper
+private static <T> void swapHelper(List<T> list, int i, int j) {
+    T temp = list.get(i);
+    list.set(i, list.get(j));
+    list.set(j, temp);
+}
+```
+
+::: tip 捕获辅助方法的本质
+Java 编译器在推断泛型方法调用时，会把通配符 `?` 捕获为一个未知的具名类型变量。`swapHelper(list, i, j)` 中的 `list` 是 `List<?>`，编译器推断 `T` 为这个未知的具体类型，于是 `List<T>` 就可以正常读写了。这是一种"以毒攻毒"的技巧。
+:::
+
+### 泛型与数组——历史遗留的矛盾
+
+Java 的数组是**协变**的（covariant），而泛型是**不变**的（invariant）。这个矛盾是 Java 类型系统中最令人困惑的设计之一。
+
+```java
+// 数组是协变的：String[] 可以赋给 Object[]
+String[] strings = new String[3];
+Object[] objects = strings;      // ✅ 编译通过
+objects[0] = "hello";            // ✅ String
+objects[1] = 42;                 // ❌ 运行时 ArrayStoreException！
+// 数组在运行时知道自己的元素类型，会在写入时检查
+
+// 泛型是不变的：List<String> 不能赋给 List<Object>
+List<String> stringList = new ArrayList<>();
+// List<Object> objectList = stringList;  // ❌ 编译错误！
+List<? extends Object> objectList = stringList;  // ✅ 通配符可以
+// objectList.add(42);  // ❌ 不能写入，从而避免了类型不安全
+```
+
+```mermaid
+graph TD
+    subgraph "数组（协变）"
+        A1["String[]"] -->|"✅ 编译通过"| A2["Object[]"]
+        A2 -->|"写入 Integer"| A3["运行时 ArrayStoreException"]
+    end
+    subgraph "泛型（不变）"
+        B1["List&lt;String&gt;"] -->|"❌ 编译错误"| B2["List&lt;Object&gt;"]
+        B1 -->|"✅ 通配符"| B3["List&lt;? extends Object&gt;"]
+        B3 -->|"❌ 编译错误"| B4["不能写入非 null"]
+    end
+```
+
+**为什么 `List<String>[]` 不合法？**
+
+```java
+// 如果允许泛型数组：
+// List<String>[] stringLists = new List<String>[1];
+// 擦除后变成 List[] stringLists = new List[1];
+// Object[] objects = stringLists;       // 数组协变
+// objects[0] = new ArrayList<Integer>();  // 运行时不报错！
+// String s = stringLists[0].get(0);      // ClassCastException！
+// 数组在运行时无法检查泛型类型（因为被擦除了），所以无法保证类型安全
+
+// 解决方案：使用通配符数组（安全但不太方便）
+List<?>[] stringLists = new List<?>[1];
+stringLists[0] = new ArrayList<String>();   // ✅
+// stringLists[0].add("hello");  // ❌ 但不能向 List<?> 中添加元素
+```
+
+::: warning 最佳实践
+尽量避免泛型数组和数组的协变特性。优先使用 `List<E>` 而不是 `E[]`，用 `List.of(...).toArray(new T[0])` 来转换，用 `@SuppressWarnings("unchecked")` 并仔细验证类型安全。
+:::
+
+### Java 10+ var 与泛型
+
+Java 10 引入了 `var` 局部变量类型推断，但它和泛型的钻石操作符有一个容易踩的坑：
+
+```java
+// ✅ 没有问题：左侧类型明确推断
+var list1 = new ArrayList<String>();
+// 推断为 ArrayList<String>
+
+// ⚠️ 有问题：钻石操作符 + var = Object 类型！
+var list2 = new ArrayList<>();
+// 推断为 ArrayList<Object>，不是你期望的 ArrayList<String>！
+// list2.add("hello");  // 可以
+// String s = list2.get(0);  // ✅ 但类型安全靠你自己保证
+
+// 为什么？钻石操作符要求编译器从上下文推断类型
+// 但 var 没有目标类型，编译器只能推断为最宽的类型
+```
+
+```java
+// 正确做法：显式指定类型参数
+var stringList = new ArrayList<String>();     // ✅ ArrayList<String>
+
+// 或者不用 var
+ArrayList<String> stringList = new ArrayList<>();  // ✅ 更清晰
+
+// 使用 Stream 的场景更安全
+var names = List.of("Alice", "Bob", "Charlie");  // ✅ List<String>
+```
+
+::: warning 注意
+`var list = new ArrayList<>()` 推断为 `ArrayList<Object>` 而非 `ArrayList<String>`。这是 var + 钻石操作符的经典陷阱。如果类型参数很重要，要么显式写出，要么不用 var。
+:::
+
 ### 桥接方法——类型擦除的补偿
 
 ```java
@@ -147,6 +472,66 @@ public class StringBox extends Box {
     public void set(Object value) { set((String) value); }  // 桥接到你的方法
 }
 ```
+
+### 实际框架应用——Gson/Jackson 的 TypeReference
+
+理解了 TypeToken 原理，就能看懂为什么反序列化需要传递类型信息：
+
+```java
+import com.google.gson.*;
+import com.google.gson.reflect.TypeToken;
+import java.lang.reflect.Type;
+import java.util.*;
+
+public class GsonGenericExample {
+
+    // ❌ 错误：直接反序列化为 Map，无法还原自定义类型
+    public static void wrong() {
+        String json = "[{\"name\":\"Alice\",\"age\":25},{\"name\":\"Bob\",\"age\":30}]";
+        Gson gson = new Gson();
+        // 默认反序列化为 LinkedTreeMap，不是 User 对象！
+        List<?> users = gson.fromJson(json, List.class);
+        // users.get(0) 是 LinkedTreeMap，不是 User
+    }
+
+    // ✅ 正确：通过 TypeToken 传递泛型类型
+    public static void correct() {
+        String json = "[{\"name\":\"Alice\",\"age\":25},{\"name\":\"Bob\",\"age\":30}]";
+        Gson gson = new Gson();
+
+        // Guava/Gson 的 TypeToken 原理和我们写的 TypeReference 完全一样
+        Type userListType = new TypeToken<List<User>>() {}.getType();
+        List<User> users = gson.fromJson(json, userListType);
+        // users.get(0) 是 User 对象 ✅
+        System.out.println(users.get(0).getName());  // Alice
+    }
+
+    static class User {
+        private String name;
+        private int age;
+        public String getName() { return name; }
+        public int getAge() { return age; }
+    }
+}
+```
+
+Jackson 的 `TypeReference<T>` 原理完全相同：
+
+```java
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.*;
+
+ObjectMapper mapper = new ObjectMapper();
+String json = "[{\"name\":\"Alice\"},{\"name\":\"Bob\"}]";
+
+// 通过匿名内部类捕获泛型类型
+List<User> users = mapper.readValue(json, new TypeReference<List<User>>() {});
+```
+
+::: tip 为什么框架需要你传类型？
+JSON 反序列化时，框架需要知道目标类型才能正确创建对象。`List<User>.class` 不存在（泛型擦除），所以框架提供 `TypeToken` / `TypeReference` 让你通过匿名内部类"携带"类型信息。这是 Java 类型擦除最经典的工作模式。
+:::
 
 ## 注解——元编程的入口
 
@@ -259,6 +644,14 @@ Producer Extends, Consumer Super。从集合中读取（生产者）用 `<? exte
 **Q3：`List<?>` 和 `List<Object>` 有什么区别？**
 
 `List<?>` 是未知类型的列表，只能读取为 Object，不能写入（除 null）。`List<Object>` 是明确类型为 Object 的列表，可以读写任何 Object。`List<String>` 可以赋值给 `List<?>`，但不能赋值给 `List<Object>`。
+
+**Q4：泛型信息真的完全被擦除了吗？**
+
+不完全。类、字段、方法声明处的泛型信息通过字节码的 **Signature 属性** 保留了下来，可以通过反射（`getGenericSuperclass()`、`getGenericReturnType()` 等）读取。但局部变量的泛型信息不会保留。
+
+**Q5：TypeToken / TypeReference 的原理是什么？**
+
+通过创建匿名内部类（如 `new TypeToken<List<String>>() {}`），利用编译器必须在字节码中保留父类泛型签名（Signature 属性）的机制，在运行时通过 `getGenericSuperclass()` 反射获取实际类型参数。Gson、Jackson、Guava 都使用了这个技巧。
 
 ## 延伸阅读
 
