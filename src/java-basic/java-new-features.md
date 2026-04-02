@@ -14,6 +14,19 @@ tag:
 
 > Java 语言从诞生到现在，不断引入新的特性和改进。从 Java 8 的 Lambda 表达式到 Java 21 的虚拟线程，每个版本都带来了革命性的变化。
 
+
+```mermaid
+timeline
+    title Java 版本演进（LTS 版本标记 ⭐）
+    2014 : Java 8 ⭐ : Lambda / Stream / Optional
+    2017 : Java 9 : 模块化系统 JPMS
+    2018 : Java 11 ⭐ : var / HTTP Client / String 新方法
+    2021 : Java 17 ⭐ : Sealed Classes / Pattern Matching
+    2023 : Java 21 ⭐ : Virtual Threads / Record Patterns / Sequenced Collections
+    2024 : Java 22 ⭐ : Statements before super / Unnamed Variables
+    2025 : Java 25 ⭐ : Compact Source Files / Flexible Constructor Bodies
+```
+
 ## Java 8 - 函数式编程革命
 
 ### Lambda 表达式
@@ -228,6 +241,18 @@ if (obj instanceof List<?> list && list.size() > 0) {
 }
 ```
 
+
+```mermaid
+flowchart LR
+    subgraph Java16之前
+        A1["if (obj instanceof String)"] --> A2["String s = (String) obj;"]
+    end
+    subgraph Java16+
+        B1["if (obj instanceof String s)"]
+    end
+    A1 -.->|简化| B1
+```
+
 ### Records（记录类）
 ```java
 // 传统类
@@ -276,6 +301,19 @@ record Person(String name, int age) {}
 Person person = new Person("Alice", 25);
 String name = person.name(); // getter
 int age = person.age(); // getter
+```
+
+
+```mermaid
+flowchart LR
+    A["record Point(int x, int y) {}"] --> B["编译生成"]
+    B --> C["final class Point"]
+    C --> D1["private final int x"]
+    C --> D2["private final int y"]
+    C --> D3["constructor(x, y)"]
+    C --> D4["equals() / hashCode()"]
+    C --> D5["toString()"]
+    C --> D6["x() / y() 访问器"]
 ```
 
 ### Switch 表达式（预览和正式发布）
@@ -359,6 +397,21 @@ private List<Order> fetchOrders() throws InterruptedException {
     Thread.sleep(1500);
     return Arrays.asList(new Order("1"), new Order("2"));
 }
+```
+
+
+```mermaid
+flowchart TD
+    subgraph 平台线程
+        A1["Thread 对象"] --> A2["OS 线程（1:1）"]
+        A2 --> A3["栈大小 ~1MB"]
+        A3 --> A4["最多几千个"]
+    end
+    subgraph 虚拟线程
+        B1["VirtualThread"] --> B2["由 JVM 调度"]
+        B2 --> B3["栈大小动态调整"]
+        B3 --> B4["可创建数百万个"]
+    end
 ```
 
 ### 文本块（Text Blocks）
@@ -517,6 +570,21 @@ String message = switch (obj) {
 | Java 23+ | 2025+ | 更多新特性 | 持续演进 |
 
 ## 迁移指南
+
+```mermaid
+flowchart TD
+    A[当前 Java 版本?] --> B[Java 8]
+    A --> C[Java 11]
+    A --> D[Java 17+]
+    B --> E["升级到 11<br/>LTS + 性能提升"]
+    C --> F["升级到 17<br/>Record/Sealed/Pattern Matching"]
+    D --> G["评估 21<br/>Virtual Threads + 最新特性"]
+    E --> H{需要 Virtual Threads?}
+    F --> H
+    H -->|是| I["升级到 21+ ⭐"]
+    H -->|否| J["稳定在 17/21 即可"]
+```
+
 
 ### 从 Java 8 迁移到 Java 11
 ```java

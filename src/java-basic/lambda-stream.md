@@ -70,6 +70,13 @@ Predicate<String> longString = s -> s.length() > 5;
 
 ### Lambda 表达式语法
 
+```mermaid
+flowchart LR
+    A["匿名内部类<br/>5行代码"] --> B["Lambda 表达式<br/>(x) -> x.length()"]
+    B --> C["方法引用<br/>String::length"]
+```
+
+
 ```java
 // 无参数，无返回值
 () -> System.out.println("Hello")
@@ -132,6 +139,16 @@ Stream<Double> random = Stream.generate(Math::random);
 ```
 
 ### Stream 的操作类型
+
+```mermaid
+flowchart LR
+    A[数据源<br/>Collection/Array] --> B[创建 Stream]
+    B --> C[中间操作<br/>filter/map/sorted...]
+    C --> C
+    C --> D[终端操作<br/>collect/forEach/reduce...]
+    D --> E[结果]
+```
+
 
 ```java
 List<Integer> numbers = Arrays.asList(1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
@@ -274,6 +291,19 @@ List<String> result = names.stream()
 ## Stream 终止操作
 
 ### collect() - 收集
+
+```mermaid
+flowchart TD
+    A[Collectors] --> B[归约 toList/toSet/toUnmodifiableList]
+    A --> C[映射 toMap/toConcurrentMap]
+    A --> D[分组 groupingBy/partitioningBy]
+    A --> E[统计 counting/summarizingInt/averagingDouble]
+    A --> F[连接 joining]
+    D --> D1[一级分组]
+    D --> D2[多级分组]
+    D --> D3[分组+统计]
+```
+
 ```java
 List<String> names = Arrays.asList("Alice", "Bob", "Charlie", "David");
 
@@ -501,6 +531,20 @@ Map<String, Integer> immutableMap = names.stream()
 ## 并行流处理
 
 ### parallelStream() 基础
+
+```mermaid
+flowchart TD
+    A[数据源] --> B[ForkJoinPool.commonPool]
+    B --> C1[子任务1: 0-249]
+    B --> C2[子任务2: 250-499]
+    B --> C3[子任务3: 500-749]
+    B --> C4[子任务4: 750-999]
+    C1 --> D[Join 合并结果]
+    C2 --> D
+    C3 --> D
+    D --> E[最终结果]
+```
+
 ```java
 List<Integer> numbers = IntStream.range(1, 1000000).boxed().collect(Collectors.toList());
 
@@ -842,6 +886,19 @@ int[] squared3 = IntStream.range(0, 1000000)
 ```
 
 ## Stream API 与传统循环对比
+
+```mermaid
+flowchart LR
+    subgraph 传统方式
+        A1[for 循环] --> A2[外部变量累加]
+        A2 --> A3[可变状态<br/>命令式]
+    end
+    subgraph Stream方式
+        B1[Stream 管道] --> B2[函数组合]
+        B2 --> B3[无副作用<br/>声明式]
+    end
+```
+
 
 ### 代码可读性对比
 ```java
