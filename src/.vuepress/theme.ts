@@ -3,6 +3,14 @@ import { hopeTheme } from "vuepress-theme-hope";
 import navbar from "./navbar.js";
 import sidebar from "./sidebar.js";
 
+const docsearch = process.env.DOCSEARCH_APP_ID
+  ? {
+      appId: process.env.DOCSEARCH_APP_ID,
+      apiKey: process.env.DOCSEARCH_API_KEY || "",
+      indexName: process.env.DOCSEARCH_INDEX_NAME || "",
+    }
+  : false;
+
 export default hopeTheme({
   hostname: "https://coolzhul.github.io",
 
@@ -57,6 +65,9 @@ export default hopeTheme({
   },
 
   plugins: {
+    // Algolia DocSearch (通过环境变量配置)
+    ...(docsearch ? { docsearch } : {}),
+
     blog: true,
 
     icon: {

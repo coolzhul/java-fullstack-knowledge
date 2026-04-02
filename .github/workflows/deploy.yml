@@ -42,6 +42,9 @@ jobs:
         run: pnpm docs:build
         env:
           BASE_URL: /java-fullstack-knowledge/
+          DOCSEARCH_APP_ID: ${{ secrets.DOCSEARCH_APP_ID }}
+          DOCSEARCH_API_KEY: ${{ secrets.DOCSEARCH_API_KEY }}
+          DOCSEARCH_INDEX_NAME: ${{ secrets.DOCSEARCH_INDEX_NAME }}
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
@@ -61,6 +64,9 @@ jobs:
         run: pnpm docs:build
         env:
           BASE_URL: /
+          DOCSEARCH_APP_ID: ${{ secrets.DOCSEARCH_APP_ID }}
+          DOCSEARCH_API_KEY: ${{ secrets.DOCSEARCH_API_KEY }}
+          DOCSEARCH_INDEX_NAME: ${{ secrets.DOCSEARCH_INDEX_NAME }}
 
       - name: Upload artifact for Tencent Cloud
         uses: actions/upload-artifact@v4
