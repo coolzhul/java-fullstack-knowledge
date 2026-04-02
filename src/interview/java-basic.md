@@ -198,3 +198,111 @@ s1 == s3;     // false（堆 vs 常量池）
 :::danger 面试追问
 - String 的 hashCode 怎么算的？→ `s[0]*31^(n-1) + s[1]*31^(n-2) + ... + s[n-1]`，为什么选 31？→ 31 是奇素数，`31 * i = (i << 5) - i` 位运算高效
 :::
+
+
+---
+
+## ⭐ ThreadLocal 的原理是什么？为什么会发生内存泄漏？怎么避免？
+
+**简要回答：** ThreadLocal 通过每个线程维护一个 `ThreadLocalMap`（key 是 ThreadLocal 的弱引用，value 是强引用）实现线程隔离。内存泄漏发生在 ThreadLocal 外部强引用被置 null 后，key 被 GC 回收变成 null，但 value 仍然强引用存在无法回收。解决方案是使用后调用 `remove()`。
+
+**深度分析：**
+
+```
+ThreadLocal 内存模型：
+
+Thread 对象
+├── ThreadLocalMap threadLocals
+│   ├── Entry[0]: key(WeakReference) → ThreadLocal@A, value → Object (强引用)
+│   ├── Entry[1]: key(WeakReference) → ThreadLocal@B, value → Object (强引用)
+│   └── Entry[n]: key(null)           → value → Object (强引用) ⚠️ 泄漏！
+│
+└── ThreadLocalMap inheritableThreadLocals
+
+内存泄漏过程：
+1. ThreadLocal ref 被置为 null（外部强引用断开）
+2. ThreadLocalMap 中 key 是 WeakReference → GC 时 key 被回收，变成 null
+3. value 仍然是强引用 → 无法被 GC → 内存泄漏
+4. 线程长期存活（如线程池）→ 泄漏的 value 一直占用内存
+```
+
+```java
+// ThreadLocal 核心源码
+public class ThreadLocal<T> {
+    public void set(T value) {
+        Thread t = Thread.currentThread();
+        ThreadLocalMap map = t.threadLocals;
+        if (map != null) {
+            map.set(this, value);  // this 作为 key
+        } else {
+            createMap(t, value);   // 首次使用创建 ThreadLocalMap
+        }
+    }
+
+    public T get() {
+        Thread t = Thread.currentThread();
+        ThreadLocalMap map = t.threadLocals;
+        if (map != null) {
+            Entry e = map.getEntry(this);
+            if (e != null) return (T) e.value;
+        }
+        return setInitialValue();  // 返回 initialValue() 的值
+    }
+
+    public void remove() {
+        ThreadLocalMap m = Thread.currentThread().threadLocals;
+        if (m != null) m.remove(this);  // ✅ 手动清理
+    }
+}
+
+// ThreadLocalMap.Entry — WeakReference
+static class Entry extends WeakReference<ThreadLocal<?>> {
+    Object value;  // 强引用
+    Entry(ThreadLocal<?> k, Object v) {
+        super(k);  // key 是弱引用
+        value = v;  // value 是强引用
+    }
+}
+```
+
+**为什么 key 设计为弱引用？**
+- 如果 key 是强引用，ThreadLocal 对象永远不会被回收（即使外部已置 null）
+- 弱引用保证 ThreadLocal 对象能被 GC 回收，但引入了 value 泄漏问题
+- 这是权衡设计：key 泄漏比 key+value 都泄漏要好
+
+**最佳实践：**
+
+```java
+// ❌ 错误写法
+public void process() {
+    threadLocal.set(new SimpleDateFormat("yyyy-MM-dd"));
+    // ... 使用
+    // 忘记 remove → 线程池场景下 value 泄漏
+}
+
+// ✅ 正确写法：try-finally 保证 remove
+public void process() {
+    try {
+        threadLocal.set(userContext);
+        // ... 业务逻辑
+    } finally {
+        threadLocal.remove();  // 必须！
+    }
+}
+```
+
+**关键细节：**
+
+| 特性 | 说明 |
+|------|------|
+| 存储位置 | 每个线程的 ThreadLocalMap，非 ThreadLocal 本身 |
+| key 类型 | WeakReference（ThreadLocal 对象） |
+| value 类型 | 强引用（实际存储的对象） |
+| 泄漏条件 | ThreadLocal 被回收 + 线程长期存活 + 未调用 remove |
+| 预防措施 | 每次 use 后 finally 中调用 remove() |
+
+:::danger 面试追问
+- InheritableThreadLocal 是什么？→ 子线程可以继承父线程的 ThreadLocal 值，但线程池中父子线程关系不确定，推荐使用 Alibaba TTL（TransmittableThreadLocal）
+- 线程池场景下 ThreadLocal 有什么坑？→ 线程被复用，上一次的 ThreadLocal 值会被带到下一次任务，必须在 finally 中 remove
+- Spring 中哪里用到了 ThreadLocal？→ RequestContextHolder（保存当前请求）、TransactionSynchronizationManager（事务资源绑定）、@Scope("request")
+:::

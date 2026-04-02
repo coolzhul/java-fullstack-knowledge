@@ -211,7 +211,7 @@ public class AopProxySelector {
 }
 ```
 
-```mermaid
+mermaid
 graph TD
     A[目标对象] --> B[代理选择器]
     B --> C{有接口?}
@@ -229,7 +229,6 @@ graph TD
     L -->|否| N[后置通知]
     M --> O[返回结果]
     N --> O
-```
 
 ## @Around 原理详解
 
@@ -352,7 +351,7 @@ public class AllAspectAdviceExample {
 }
 ```
 
-```mermaid
+mermaid
 graph TD
     A[方法调用] --> B[代理拦截]
     B --> C{通知类型}
