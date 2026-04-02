@@ -40,28 +40,28 @@ Consumer<String> print = s -> System.out.println(s);
 
 ### 函数式接口详解
 
-#### Consumer<T> - 消费者
+#### Consumer\<T\> - 消费者
 ```java
 // 消费一个参数，无返回值
 Consumer<String> printConsumer = s -> System.out.println("消费: " + s);
 printConsumer.accept("Hello Lambda");
 ```
 
-#### Supplier<T> - 供给者
+#### Supplier\<T\> - 供给者
 ```java
 // 无参数，返回一个值
 Supplier<String> helloSupplier = () -> "Hello from Supplier";
 System.out.println(helloSupplier.get());
 ```
 
-#### Function<T,R> - 函数
+#### Function\<T,R\> - 函数
 ```java
 // 一个参数，返回一个值
 Function<String, Integer> lengthFunc = String::length;
 Function<String, String> upperFunc = String::toUpperCase;
 ```
 
-#### Predicate<T> - 断言
+#### Predicate\<T\> - 断言
 ```java
 // 一个参数，返回布尔值
 Predicate<String> nonEmpty = s -> !s.isEmpty();

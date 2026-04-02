@@ -4,121 +4,433 @@
 
 ---
 
-## ⭐ 分布式锁有哪些实现方式？Redis 和 ZooKeeper 实现分布式锁的区别？
+## ⭐⭐⭐ 分布式锁实现：Redis vs Zookeeper 对比选型
 
-**简要回答：** 常见实现方式有 Redis（SETNX + Lua 脚本 / Redisson）、ZooKeeper（临时顺序节点）、MySQL（行锁/唯一索引）。Redis 性能高但可靠性依赖主从切换；ZooKeeper 可靠性强（CP）但性能较低。
+**简要回答：** 分布式锁用于在分布式环境下保证同一资源同一时刻只有一个客户端可以访问。主流实现有 Redis（SETNX + Lua 脚本）和 Zookeeper（临时顺序节点），两者各有优劣：Redis 性能高但可靠性略低，Zookeeper 可靠性高但性能较低。
 
 **深度分析：**
 
+### Redis 分布式锁
+
+#### 基础实现（Redisson）
+
 ```java
-// Redis 分布式锁 — Redisson 实现（推荐）
-RLock lock = redisson.getLock("order:lock:" + orderId);
-try {
-    // 尝试加锁：等待 5 秒，锁自动过期 30 秒
-    if (lock.tryLock(5, 30, TimeUnit.SECONDS)) {
-        // 看门狗机制：每 10 秒续期到 30 秒（防止业务未执行完锁就过期）
-        doBusiness();
+// Redisson 分布式锁使用
+@Autowired
+private RedissonClient redissonClient;
+
+public void deductStock(Long productId) {
+    RLock lock = redissonClient.getLock("lock:stock:" + productId);
+    try {
+        // 尝试加锁：等待 5 秒，锁持有 30 秒自动释放
+        if (lock.tryLock(5, 30, TimeUnit.SECONDS)) {
+            try {
+                // 查询库存
+                int stock = stockMapper.getStock(productId);
+                if (stock > 0) {
+                    stockMapper.deduct(productId);
+                }
+            } finally {
+                lock.unlock();
+            }
+        } else {
+            throw new BusinessException("获取锁失败，请稍后重试");
+        }
+    } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
     }
-} finally {
-    lock.unlock();  // Lua 脚本保证：只有锁的持有者才能释放
 }
-
-// Redisson 加锁 Lua 脚本（原子性保证）
-// KEYS[1] = lockKey, ARGV[1] = expireTime, ARGV[2] = uniqueId
-if (redis.call('exists', KEYS[1]) == 0) then          // 锁不存在
-    redis.call('hset', KEYS[1], ARGV[2], 1);          // 加锁
-    redis.call('pexpire', KEYS[1], ARGV[1]);           // 设置过期
-    return nil;
-end;
-if (redis.call('hexists', KEYS[1], ARGV[2]) == 1) then  // 重入
-    redis.call('hincrby', KEYS[1], ARGV[2], 1);
-    redis.call('pexpire', KEYS[1], ARGV[1]);
-    return nil;
-end;
-return redis.call('pttl', KEYS[1]);                     // 返回剩余时间
 ```
 
+#### Redisson 看门狗机制
+
+```mermaid
+sequenceDiagram
+    participant Client as 客户端
+    participant Redis as Redis Server
+    participant Dog as 看门狗线程
+
+    Client->>Redis: SET lock_key value NX PX 30000
+    Redis-->>Client: OK（加锁成功）
+    Dog->>Dog: 启动看门狗（每 10s 执行）
+    Note over Dog: 检查锁是否还被持有
+    loop 每 10 秒
+        Dog->>Redis: EXPIRE lock_key 30000
+        Redis-->>Dog: OK（续约成功）
+    end
+    Client->>Redis: DEL lock_key
+    Note over Dog: 客户端释放锁，看门狗停止
 ```
-ZooKeeper 分布式锁 — 临时顺序节点：
 
-/locks/order-lock/
-├── lock-0000000001  (临时顺序节点，客户端1创建)
-├── lock-0000000002  (临时顺序节点，客户端2创建)
-└── lock-0000000003  (临时顺序节点，客户端3创建)
-
-流程：
-1. 每个客户端在 /locks 路径下创建临时顺序节点
-2. 获取子节点列表并排序
-3. 判断自己是否是最小编号 → 是则获取锁
-4. 否则监听（watch）前一个节点的删除事件
-5. 前一个节点删除 → 收到通知 → 重新判断 → 获取锁
+```java
+// Redisson 看门狗原理（简化版）
+// 锁默认 30 秒过期，看门狗每 10 秒续约一次（30/3=10）
+// 如果客户端宕机，看门狗停止续约，锁 30 秒后自动释放
+// 注意：必须使用 lock.lock() 或 lock.tryLock() 无 timeout 参数才启用看门狗
 ```
 
-**关键细节：**
+#### Redis 分布式锁的 Lua 脚本保证原子性
 
-| 特性 | Redis (Redisson) | ZooKeeper |
-|------|-----------------|-----------|
-| 实现原理 | SETNX + Lua + 看门狗 | 临时顺序节点 + Watch |
-| 性能 | 高（内存操作，10万+ QPS） | 较低（磁盘同步，数万 QPS） |
-| 可靠性 | AP（主从切换可能丢锁） | CP（ZAB 协议保证强一致） |
-| 锁释放 | 过期时间 + 看门狗续期 | 临时节点（Session 断开自动删除） |
-| 公平性 | 非公平（争抢式） | 公平（顺序节点排队） |
-| 阻塞等待 | 自旋重试 | Watch 事件通知（无轮询） |
-| 适用场景 | 高并发、允许极小概率丢锁 | 强一致性要求高（如金融） |
+```lua
+-- 加锁脚本
+if redis.call('setnx', KEYS[1], ARGV[1]) == 1 then
+    redis.call('expire', KEYS[1], ARGV[2])
+    return 1
+else
+    return 0
+end
+
+-- 释放锁脚本（防止释放别人的锁）
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('del', KEYS[1])
+else
+    return 0
+end
+```
+
+### Zookeeper 分布式锁
+
+```java
+// Curator 实现 Zookeeper 分布式锁
+@Autowired
+private CuratorFramework curatorFramework;
+
+public void deductStock(Long productId) {
+    InterProcessMutex lock = new InterProcessMutex(
+        curatorFramework, "/locks/stock/" + productId);
+    try {
+        if (lock.acquire(5, TimeUnit.SECONDS)) {
+            try {
+                int stock = stockMapper.getStock(productId);
+                if (stock > 0) {
+                    stockMapper.deduct(productId);
+                }
+            } finally {
+                lock.release();
+            }
+        }
+    } catch (Exception e) {
+        throw new RuntimeException("获取锁失败", e);
+    }
+}
+```
+
+#### Zookeeper 锁原理（临时顺序节点）
+
+```mermaid
+sequenceDiagram
+    participant C1 as 客户端1
+    participant C2 as 客户端2
+    participant ZK as Zookeeper
+
+    C1->>ZK: 创建临时顺序节点 /locks/lock-0000000001
+    C2->>ZK: 创建临时顺序节点 /locks/lock-0000000002
+    
+    C1->>ZK: getChildren /locks
+    ZK-->>C1: [lock-0000000001, lock-0000000002]
+    Note over C1: 0001 是最小节点 → 获得锁
+    
+    C2->>ZK: getChildren /locks
+    ZK-->>C2: [lock-0000000001, lock-0000000002]
+    Note over C2: 0002 不是最小节点 → 监听 0001 的删除事件
+    
+    C1->>C1: 执行业务逻辑
+    C1->>ZK: 删除 /locks/lock-0000000001
+    ZK-->>C2: 通知 0001 被删除
+    C2->>C2: 重新检查，0002 是最小 → 获得锁
+```
+
+### 对比选型
+
+| 维度 | Redis 分布式锁 | Zookeeper 分布式锁 |
+|------|---------------|-------------------|
+| **性能** | 高（单线程处理，10万+ QPS） | 较低（写需要走 Leader，几万 QPS） |
+| **可靠性** | 较低（主从切换可能丢锁） | 高（CP 模型，强一致性） |
+| **实现复杂度** | 中（需要 Lua 脚本 + 看门狗） | 中（Curator 封装好） |
+| **锁释放** | 过期自动释放 + 主动释放 | 客户端宕机自动释放（临时节点） |
+| **公平性** | 非公平（抢锁） | 公平（顺序节点排队） |
+| **可用性** | AP 模型 | CP 模型 |
+| **适用场景** | 高并发、允许少量不一致 | 金融、支付等强一致场景 |
+
+### RedLock 算法
+
+```mermaid
+flowchart TD
+    A[客户端请求加锁] --> B["同时向 N 个（≥5）Redis 节点请求加锁"]
+    B --> C{"成功获得 ≥ (N/2 + 1) 个节点的锁?"}
+    C -->|是| D["计算加锁总耗时 < 锁的有效时间?"]
+    D -->|是| E["加锁成功"]
+    D -->|否| F["释放所有已获取的锁，失败"]
+    C -->|否| F
+```
+
+> **注意：** RedLock 算法由 Redis 作者 Antirez 提出，但被分布式专家 Martin Kleppmann 质疑（时钟漂移、GC 停顿等问题）。生产环境推荐使用 Redisson 的单实例锁 + 看门狗，或直接用 Zookeeper。
+
+:::tip 实践建议
+- 大多数业务场景用 **Redis（Redisson）** 就够了，性能好、使用简单
+- 金融、支付等强一致性场景用 **Zookeeper（Curator）**
+- 锁的粒度尽量细，避免锁住大范围资源
+- 锁一定要设超时时间，防止死锁
+- 避免在锁内做耗时操作（如 RPC 调用）
+- 考虑锁的可重入性（Redisson 支持）
+
+```java
+// 最佳实践：锁 + 幂等 + 重试
+public boolean deductStock(Long productId, String requestId) {
+    // 1. 幂等检查（防止重复扣减）
+    if (deductRecordMapper.existsByRequestId(requestId)) {
+        return true;
+    }
+    
+    RLock lock = redissonClient.getLock("lock:stock:" + productId);
+    try {
+        if (lock.tryLock(3, 10, TimeUnit.SECONDS)) {
+            try {
+                // 2. 再次幂等检查（双重检查）
+                if (deductRecordMapper.existsByRequestId(requestId)) {
+                    return true;
+                }
+                // 3. 业务逻辑
+                int stock = stockMapper.getStock(productId);
+                if (stock > 0) {
+                    stockMapper.deduct(productId);
+                    deductRecordMapper.insert(requestId, productId);
+                    return true;
+                }
+                return false;
+            } finally {
+                lock.unlock();
+            }
+        }
+        return false;
+    } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        return false;
+    }
+}
+```
+:::
 
 :::danger 面试追问
-- Redis 主从切换时锁会丢失吗？→ 是的，Master 加锁后还未同步给 Slave 就宕机，Slave 提升为 Master 后锁丢失。Redlock 算法通过多个独立 Redis 实例解决，但争议较大
-- Redisson 的看门狗机制？→ 加锁时不指定 leaseTime 则默认 30 秒，看门狗每 10 秒检查锁是否还被持有，是则续期到 30 秒，防止业务没执行完锁就过期
-- 数据库能做分布式锁吗？→ 可以（SELECT ... FOR UPDATE 或唯一索引），但性能差、死锁处理复杂，一般不推荐
+- Redis 主从切换时锁会丢失吗？→ 会。客户端 A 在 Master 加锁，Master 还没同步到 Slave 就宕机了，Slave 升级为 Master 后没有锁信息，客户端 B 可以加锁成功
+- Zookeeper 的临时节点和持久节点有什么区别？→ 临时节点在客户端会话结束时自动删除，持久节点需要手动删除。分布式锁用临时顺序节点
+- Redisson 的公平锁是怎么实现的？→ 基于 Redis 的 List 结构实现等待队列，按请求顺序排队
+- 如何实现分布式锁的可重入？→ Redisson 使用 Hash 结构记录加锁次数，每次加锁计数 +1，解锁计数 -1，为 0 时真正释放
+- 分布式锁和数据库乐观锁怎么选？→ 乐观锁适合冲突少的场景（通过 version 字段），分布式锁适合冲突多的场景
 :::
 
 ---
 
-## ⭐ 如何选型消息队列？Kafka、RocketMQ、RabbitMQ 各自的优缺点？
+## ⭐⭐ 消息队列选型：Kafka vs RabbitMQ vs RocketMQ
 
-**简要回答：** Kafka 适合大数据/日志场景（高吞吐、持久化强）；RocketMQ 适合业务消息（事务消息、顺序消息、延迟消息）；RabbitMQ 适合中小规模业务（路由灵活、协议丰富、管理界面友好）。
+**简要回答：** Kafka 适合大数据量、高吞吐的日志和流处理场景；RabbitMQ 适合低延迟、复杂路由的企业级消息场景；RocketMQ 适合电商、金融等需要事务消息和顺序消息的场景。选型核心看业务需求：吞吐量优先选 Kafka，可靠性优先选 RabbitMQ，事务消息选 RocketMQ。
 
 **深度分析：**
 
-```
-三大 MQ 定位对比：
+### 三大 MQ 对比
 
-Kafka：        日志采集、流处理、大数据    →  吞吐量之王
-RocketMQ：     电商交易、金融支付          →  功能最全面
-RabbitMQ：     中小规模业务、微服务解耦     →  易用性最佳
-```
-
-**关键细节：**
-
-| 特性 | Kafka | RocketMQ | RabbitMQ |
+| 维度 | Kafka | RabbitMQ | RocketMQ |
 |------|-------|----------|----------|
-| 开发语言 | Scala/Java | Java | Erlang |
-| 吞吐量 | 百万级/秒 | 十万级/秒 | 万级/秒 |
-| 延迟 | ms 级 | ms 级 | μs 级（Erlang VM） |
-| 消息可靠性 | 同步/异步刷盘 | 同步刷盘 | 消息持久化 + ACK |
-| 事务消息 | 不支持（幂等替代） | ✅ 支持 | 不支持 |
-| 延迟消息 | 不支持 | ✅ 18 个延迟级别 | ✅ 死信队列 + 插件 |
-| 顺序消息 | ✅ 分区内有序 | ✅ 严格顺序 | ❌ 不保证 |
-| 消息回溯 | ✅ offset 重置 | ✅ 时间戳回溯 | ❌ 不支持 |
-| 消息堆积 | ✅ 磁盘存储，PB 级 | ✅ 磁盘存储 | ❌ 内存为主，堆积能力弱 |
-| 运维复杂度 | 中（依赖 ZooKeeper/KRaft） | 中 | 低（单机友好） |
-| 社区生态 | 最强（大数据生态） | 国内活跃 | 国际活跃 |
+| **语言** | Scala/Java | Erlang | Java |
+| **单机吞吐量** | 10万+ 级 | 万级 | 10万级 |
+| **延迟** | ms 级 | μs 级 | ms 级 |
+| **消息可靠性** | 高（副本机制） | 高（确认机制） | 高（同步刷盘） |
+| **事务消息** | ❌ 不支持 | ❌ 不支持 | ✅ 支持 |
+| **顺序消息** | ✅ 分区内有序 | ❌ 不保证 | ✅ 严格有序 |
+| **消息回溯** | ✅ 支持 offset 回溯 | ❌ 消费后删除 | ✅ 支持时间回溯 |
+| **消息堆积** | ✅ 支持 TB 级 | ❌ 内存堆积有上限 | ✅ 支持 |
+| **生态** | 大数据生态完善 | 企业级集成丰富 | 阿里生态 |
+| **适用场景** | 日志、大数据、流处理 | 业务消息、RPC | 电商、金融、订单 |
 
-**选型决策树：**
+### 架构对比
 
+```mermaid
+graph TB
+    subgraph "Kafka 架构"
+        KP["Producer"] --> KB["Broker（Partition）<br/>日志追加存储"]
+        KB --> KC["Consumer Group<br/>每个分区一个消费者"]
+        KB -.->|副本| KB2["Broker（Replica）"]
+        KB -.->|副本同步| KB3["Zookeeper/KRaft<br/>元数据管理"]
+    end
+
+    subgraph "RabbitMQ 架构"
+        RP["Producer"] --> RE["Exchange<br/>（路由规则）"]
+        RE -->|Direct| RQ1["Queue 1"]
+        RE -->|Topic| RQ2["Queue 2"]
+        RE -->|Fanout| RQ3["Queue 3"]
+        RQ1 --> RC["Consumer"]
+    end
+
+    subgraph "RocketMQ 架构"
+        RLP["Producer"] --> RN["NameServer<br/>（注册中心）"]
+        RLP --> RB["Broker<br/>CommitLog + ConsumeQueue"]
+        RB --> RLC["Consumer Group"]
+        RN -.->|路由信息| RB
+    end
 ```
-日处理数据量 > 亿级？
-├── 是 → Kafka（日志、流处理、大数据）
-└── 否
-    ├── 需要事务消息/顺序消息？
-    │   ├── 是 → RocketMQ（电商、金融）
-    │   └── 否
-    │       ├── 团队规模小/快速上手？→ RabbitMQ
-    │       └── 消息堆积要求高？→ RocketMQ
+
+### Kafka 适用场景
+
+```java
+// Kafka 生产者示例
+@Configuration
+public class KafkaConfig {
+    
+    @Bean
+    public Producer<String, String> kafkaProducer() {
+        Properties props = new Properties();
+        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
+        props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
+        props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
+        // 可靠性配置
+        props.put(ProducerConfig.ACKS_CONFIG, "all");          // 所有副本确认
+        props.put(ProducerConfig.RETRIES_CONFIG, 3);            // 重试次数
+        props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true); // 幂等
+        return new KafkaProducer<>(props);
+    }
+}
+
+// Kafka 典型场景：日志收集、用户行为追踪、实时数仓
 ```
+
+**Kafka 优势：**
+- 超高吞吐量：顺序写磁盘 + 零拷贝 + 批量发送
+- 持久化存储：消息存储在磁盘，支持长期保留
+- 水平扩展：增加 Partition 提升并发
+- 大数据生态集成：Spark、Flink、Kafka Streams
+
+### RabbitMQ 适用场景
+
+```java
+// RabbitMQ 延迟消息（死信队列实现）
+@Configuration
+public class RabbitMQConfig {
+    
+    // 业务队列
+    @Bean
+    public Queue orderQueue() {
+        return QueueBuilder.durable("order.queue").build();
+    }
+    
+    // 死信队列（延迟消息）
+    @Bean
+    public Queue deadLetterQueue() {
+        return QueueBuilder.durable("order.dead.queue").build();
+    }
+    
+    // 交换器
+    @Bean
+    public DirectExchange orderExchange() {
+        return new DirectExchange("order.exchange");
+    }
+    
+    // 业务队列绑定死信交换器
+    @Bean
+    public Queue orderQueueWithDLX() {
+        Map<String, Object> args = new HashMap<>();
+        args.put("x-dead-letter-exchange", "dlx.exchange");  // 死信交换器
+        args.put("x-dead-letter-routing-key", "order.dead");
+        args.put("x-message-ttl", 30000);  // 30秒过期转死信
+        return QueueBuilder.durable("order.delay.queue").withArguments(args).build();
+    }
+}
+```
+
+**RabbitMQ 优势：**
+- 低延迟：μs 级消息投递
+- 丰富路由：Direct、Topic、Fanout、Headers
+- 灵活的消息模型：延迟队列、优先级队列、死信队列
+- 高可靠性：消息确认、持久化、镜像队列
+
+### RocketMQ 适用场景
+
+```java
+// RocketMQ 事务消息（电商下单场景）
+@Component
+public class OrderTransactionProducer {
+    
+    @Autowired
+    private RocketMQTemplate rocketMQTemplate;
+    
+    public void createOrder(Order order) {
+        // 发送半消息（消费者暂时不可见）
+        rocketMQTemplate.sendMessageInTransaction(
+            "order-topic",
+            MessageBuilder.withPayload(JSON.toJSONString(order)).build(),
+            order
+        );
+    }
+    
+    // 本地事务执行器
+    @RocketMQTransactionListener
+    public class OrderTransactionListener implements RocketMQLocalTransactionListener {
+        
+        @Override
+        public RocketMQLocalTransactionState executeLocalTransaction(Message msg, Object arg) {
+            try {
+                Order order = (Order) arg;
+                orderMapper.insert(order);  // 执行本地事务
+                return RocketMQLocalTransactionState.COMMIT;
+            } catch (Exception e) {
+                return RocketMQLocalTransactionState.ROLLBACK;
+            }
+        }
+        
+        @Override
+        public RocketMQLocalTransactionState checkLocalTransaction(Message msg) {
+            // 事务回查：MQ 多次未收到确认时调用
+            String orderId = (String) msg.getHeaders().get("orderId");
+            Order order = orderMapper.selectById(orderId);
+            if (order != null) {
+                return RocketMQLocalTransactionState.COMMIT;
+            }
+            return RocketMQLocalTransactionState.UNKNOWN;
+        }
+    }
+}
+```
+
+**RocketMQ 优势：**
+- 事务消息：分布式事务的最佳实践
+- 顺序消息：同一订单的消息顺序消费
+- 消息回溯：按时间重新消费
+- 延迟消息：18 个固定延迟级别
+
+### 选型决策树
+
+```mermaid
+flowchart TD
+    A[消息队列选型] --> B{"是否需要事务消息?"}
+    B -->|是| C["✅ RocketMQ"]
+    B -->|否| D{"是否大数据场景?<br/>（日志/流处理/海量数据）"}
+    D -->|是| E["✅ Kafka"]
+    D -->|否| F{"是否需要复杂路由?<br/>（延迟队列/优先级/精细路由）"}
+    F -->|是| G["✅ RabbitMQ"]
+    F -->|否| H{"团队技术栈?"}
+    H -->|Java 为主| I["✅ RocketMQ"]
+    H -->|多语言混合| J["✅ Kafka 或 RabbitMQ"]
+```
+
+:::tip 实践建议
+- **中小项目**：RabbitMQ，上手快、功能全、社区好
+- **大数据项目**：Kafka，吞吐量无敌、生态完善
+- **电商/金融项目**：RocketMQ，事务消息是刚需
+- 消息队列是"终极武器"，不要为了用而用。简单场景用 Redis 队列就够了
+- 生产环境务必配置：消息确认、重试、死信队列、监控告警
+
+```java
+// 通用最佳实践
+// 1. 消息生产者：设置唯一消息 ID（幂等）
+// 2. 消息消费者：先处理业务再确认（防止消息丢失）
+// 3. 消息幂等：用 messageId 去重
+// 4. 消息积压：增加消费者数量 + 临时扩容 + 紧急消费程序
+```
+:::
 
 :::danger 面试追问
-- Kafka 如何保证消息不丢失？→ Producer: acks=all + retries; Broker: min.insync.replicas ≥ 2 + 同步刷盘; Consumer: 手动提交 offset
-- RocketMQ 事务消息的实现原理？→ 半消息 + 本地事务执行 + 回查机制（Broker 定时回查 Producer 事务状态）
-- 如何保证消息的幂等消费？→ 全局唯一消息 ID + Redis/数据库去重表，消费前先查重
+- Kafka 如何保证消息不丢失？→ Producer acks=all + Broker min.insync.replicas=2 + Consumer 手动提交 offset
+- 如何处理消息积压？→ 临时增加 Partition 和 Consumer、写程序快速消费到新 Topic、消费端优化处理逻辑
+- RabbitMQ 如何保证消息顺序消费？→ 单 Queue 单 Consumer 或使用 Consistent Hashing Exchange
+- RocketMQ 事务消息的原理？→ 半消息 → 执行本地事务 → 提交/回滚 → 回查机制
+- Kafka 的零拷贝原理？→ sendfile 系统调用，数据从磁盘直接到网卡，跳过用户空间
 :::
