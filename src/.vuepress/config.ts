@@ -11,6 +11,10 @@ export default defineUserConfig({
   title: "Java全栈知识库",
   description: "涵盖Java基础、进阶、Spring生态、数据库、分布式技术等全方位知识",
 
+  head: [
+    ["meta", { name: "algolia-site-verification", content: "9492C4FC620FAA6E" }],
+  ],
+
   theme,
 
   shouldPrefetch: false,
