@@ -16,6 +16,12 @@ tag:
 
 ## 基础入门：Spring MVC 是什么？
 
+::: tip Spring MVC vs Spring WebFlux
+- **Spring MVC**：基于 Servlet，同步阻塞模型，一个请求一个线程（Tomcat 线程池）
+- **Spring WebFlux**：基于 Reactive（Project Reactor），异步非阻塞，少量线程处理大量请求
+- 选型建议：传统 CRUD 项目用 MVC（简单直观），高并发 I/O 密集型用 WebFlux（如网关、实时推送）
+:::
+
 ### 一个 RESTful API 的完整流程
 
 ```java
@@ -70,6 +76,17 @@ public class UserController {
 ---
 
 ## 请求处理全流程
+
+::: details DispatcherServlet 的继承体系
+```
+HttpServlet (Servlet API)
+  └── HttpServletBean (Spring)
+       └── FrameworkServlet (Spring)
+            └── DispatcherServlet (Spring MVC)
+```
+- `FrameworkServlet` 负责：初始化 WebApplicationContext、处理 `POST/PUT/DELETE` 的 `doXxx()` 方法
+- `DispatcherServlet` 负责：分发请求到 Handler、处理视图解析（`doDispatch()` 是核心方法）
+:::
 
 ```mermaid
 graph TD
@@ -272,6 +289,12 @@ public class WebConfig implements WebMvcConfigurer {
 
 ### 参数校验
 
+
+:::warning 参数校验常见坑
+1. **@Valid 和 @Validated 的区别**：@Valid 是 JSR 标准，@Validated 是 Spring 增强版（支持分组校验）
+2. **嵌套对象必须加 @Valid**：`@Valid OrderRequest order` 中的嵌套对象也要标注
+3. **BindingResult 必须紧跟 @Valid 参数**：否则异常直接抛出，不会进入方法体
+:::
 ```java
 // DTO 校验注解
 public class CreateUserRequest {
@@ -333,6 +356,12 @@ public class UniqueUsernameValidator implements ConstraintValidator<UniqueUserna
 ---
 
 ## 统一响应格式
+
+::: warning 为什么需要统一响应格式？
+1. **前端统一处理**：前端只需要判断 `code` 字段，不需要关心每个接口的响应结构
+2. **全局异常兜底**：即使 Controller 忘了 try-catch，`@RestControllerAdvice` 也能包装异常响应
+3. **API 文档一致性**：所有接口的响应结构一致，减少沟通成本
+:::
 
 ### 统一响应包装
 
@@ -691,6 +720,12 @@ public class CorsFilter extends OncePerRequestFilter {
 
 ### 拦截器 vs 过滤器对比
 
+
+:::tip 如何选择：拦截器 vs 过滤器？
+- **过滤器**：处理编码、CORS、请求日志、安全认证（Spring Security 底层是 Filter）
+- **拦截器**：处理权限校验、日志记录、性能监控、登录状态检查
+- 需要访问 Spring Bean → 用拦截器；需要处理请求/响应原始流 → 用过滤器
+:::
 ```mermaid
 graph LR
     A[HTTP 请求] --> B[Filter]

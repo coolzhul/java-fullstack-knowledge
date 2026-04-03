@@ -257,6 +257,13 @@ public class OrderService {
 
 ## @Autowired vs @Resource vs @Inject 区别
 
+::: details 三大注入注解的历史背景
+- **@Autowired**：Spring 2.5 引入，Spring 生态专用
+- **@Resource**：JSR-250（Java 标准），由 javax.annotation 包提供
+- **@Inject**：JSR-330（Java 标准），由 javax.inject 包提供
+- Spring 同时支持三者，但推荐 Spring 项目用 @Autowired，需要解耦框架时用 @Resource
+:::
+
 这三个注解都能完成依赖注入，但来源和特性完全不同：
 
 ```java
@@ -598,6 +605,13 @@ public class MyBean implements BeanNameAware, BeanFactoryAware,
 
 ## 循环依赖——三级缓存的真相
 
+::: warning 循环依赖是设计问题
+循环依赖本质上是架构设计的问题，Spring 的三级缓存只是"兜底"方案。正确的做法是从设计上消除循环依赖：
+1. **抽取公共逻辑**到第三个 Bean 中
+2. **使用事件驱动**替代直接依赖
+3. **延迟注入**：用 `@Lazy` 让其中一个 Bean 延迟初始化
+:::
+
 ### 什么是循环依赖？
 
 ```java
@@ -776,6 +790,12 @@ public class B {
 
 ## Bean 作用域详解
 
+::: details 作用域的底层实现
+- **singleton**：BeanDefinition 中 singleton 属性为 true，创建后缓存到 `singletonObjects` 一级缓存
+- **prototype**：每次 `getBean()` 时都走完整的 `createBean()` 流程，不缓存
+- **request/session/application**：通过 `Scope` 接口实现，底层用 `ThreadLocal` / `HttpSession` / `ServletContext` 存储
+:::
+
 ### 五种作用域
 
 ```java
@@ -886,6 +906,10 @@ public class ShoppingCart {
 ```
 
 ## 条件装配——Spring Boot 自动配置的基础
+
+::: tip 条件装配是 Spring Boot 自动配置的核心
+Spring Boot 的 `spring-boot-autoconfigure` 中有上百个自动配置类，每个都用 `@Conditional` 系列注解控制生效条件。理解条件装配，就理解了 Spring Boot 的"约定优于配置"。
+:::
 
 ```java
 // 核心条件注解

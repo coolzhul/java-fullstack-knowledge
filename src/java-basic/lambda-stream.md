@@ -140,6 +140,12 @@ Stream<Double> random = Stream.generate(Math::random);
 
 ### Stream 的操作类型
 
+
+:::tip Stream 惰性求值（Lazy Evaluation）
+中间操作（filter/map/flatMap/sorted/limit/skip）是**惰性**的，不会立即执行，只是构建一个操作链。
+只有遇到**终止操作**（collect/forEach/reduce/count/min/max/findAny）时，才会一次性遍历数据源并执行所有中间操作。
+这就是为什么 Stream 的性能可以很高——它可以在终止操作时进行优化（如短路、融合）。
+:::
 ```mermaid
 flowchart LR
     A[数据源<br/>Collection/Array] --> B[创建 Stream]
@@ -529,6 +535,21 @@ Map<String, Integer> immutableMap = names.stream()
 ```
 
 ## 并行流处理
+
+::: warning 并行流不是银弹
+1. **CPU 密集型**才用并行流，I/O 密集型（网络请求、文件读写）用 CompletableFuture
+2. **数据量大**（>10000）才有收益，小数据集并行流的线程调度开销反而更大
+3. **避免共享可变状态**：并行流中修改共享变量会导致线程安全问题
+4. **注意 ForkJoinPool**：默认用公共 ForkJoinPool（common pool），任务阻塞会影响其他并行流
+5. **测量，不要猜测**：用 JMH 基准测试验证，不要凭感觉用并行流
+:::
+
+:::tip parallelStream 注意事项
+1. **ForkJoinPool.commonPool()** 线程池默认大小 = CPU 核数 - 1，所有 parallelStream 共享
+2. **ArrayList 比 LinkedList 快**：ArrayList 可精确拆分，LinkedList 需要遍历
+3. **避免在并行流中使用 synchronized**：会退化为串行，使用线程安全收集器（Collectors.toConcurrentMap）
+4. **I/O 操作不要用并行流**：用 CompletableFuture 替代
+:::
 
 ### parallelStream() 基础
 

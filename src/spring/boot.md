@@ -181,6 +181,12 @@ Spring Boot 3.x（推荐）：
 
 ### 自动配置生效的条件
 
+
+:::tip 自动配置调试技巧
+- 启动时加 `--debug` 或配置 `debug=true`，可以看到哪些自动配置生效/未生效及原因
+- 查看报告：`ConditionEvaluationReportLoggingListener`
+- 核心：classpath 有对应类 + 没有排除 + 满足条件注解 = 自动配置生效
+:::
 ```java
 // 以 RedisAutoConfiguration 为例：
 @Configuration
@@ -272,6 +278,12 @@ public class CacheAutoConfiguration {
 
 :::warning 条件注解的执行顺序
 条件注解的判断发生在配置类处理阶段，早于 Bean 的实例化。如果两个条件注解互相依赖，可能会导致鸡生蛋的问题。通常的解决方案是使用 `@AutoConfigureBefore` 和 `@AutoConfigureAfter` 控制配置类的加载顺序。
+
+:::tip Starter 命名规范
+- 官方 Starter：`spring-boot-starter-xxx`（如 spring-boot-starter-web）
+- 第三方 Starter：`xxx-spring-boot-starter`（如 mybatis-spring-boot-starter）
+- 自定义 Starter 时遵循第三方命名规范，避免与官方冲突
+:::
 :::
 
 ---

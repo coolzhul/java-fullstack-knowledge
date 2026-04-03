@@ -477,3 +477,102 @@ public class OrderService {
 - 事务失效了怎么排查？→ 检查：是否 public、是否同类内部调用、异常是否被吞、rollbackFor 是否配置、数据库引擎是否支持
 - Spring 事务和分布式事务（Seata）有什么关系？→ Spring 事务是本地事务，Seata 是分布式事务解决方案（AT/TCC/Saga 模式）
 :::
+
+---
+
+## ⭐ Spring Boot 自动配置原理？
+
+**简要回答：** Spring Boot 自动配置通过 `@EnableAutoConfiguration` → `@Import(AutoConfigurationImportSelector.class)` → 加载 `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports` 文件中的所有自动配置类，每个配置类用 `@Conditional` 系列注解判断是否生效。
+
+**深度分析：**
+
+```mermaid
+flowchart TD
+    A["@SpringBootApplication"] --> B["@EnableAutoConfiguration"]
+    B --> C["@Import<br/>AutoConfigurationImportSelector"]
+    C --> D["SpringFactoriesLoader<br/>加载自动配置类列表"]
+    D --> E["META-INF/spring/<br/>org.springframework.boot.autoconfigure.<br/>AutoConfiguration.imports"]
+    E --> F["遍历每个 AutoConfiguration"]
+    F --> G{"@Conditional 判断"}
+    G -->|条件满足| H["注册 BeanDefinition"]
+    G -->|条件不满足| I["跳过"]
+    
+    style A fill:#eaf2f8,stroke:#2980b9
+    style H fill:#eafaf1,stroke:#27ae60
+    style I fill:#fdedec,stroke:#e74c3c
+```
+
+**常用条件注解：**
+
+```java
+@ConditionalOnClass(DataSource.class)          // classpath 中有此类
+@ConditionalOnMissingBean(DataSource.class)     // 容器中无此 Bean
+@ConditionalOnProperty("spring.datasource.url") // 配置了此属性
+@ConditionalOnWebApplication                    // 是 Web 应用
+@ConditionalOnExpression("${feature.enabled}")  // SpEL 表达式为 true
+```
+
+**自定义 Starter 的步骤：**
+1. 创建 `xxx-spring-boot-starter` 模块
+2. 编写自动配置类 `XxxAutoConfiguration`
+3. 编写属性配置类 `XxxProperties`（`@ConfigurationProperties`）
+4. 在 `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports` 中注册
+5. 业务项目引入 starter 依赖 + 配置属性即可
+
+:::danger 面试追问
+- 如何排除某个自动配置？→ `@SpringBootApplication(exclude = {DataSourceAutoConfiguration.class})`
+- 自动配置类加载的顺序怎么控制？→ `@AutoConfigureBefore`、`@AutoConfigureAfter`、`@AutoConfigureOrder`
+- `spring.factories` 和 `AutoConfiguration.imports` 的区别？→ Spring Boot 2.7 以前用 `spring.factories`，3.0 以后改用 `AutoConfiguration.imports`（性能更好）
+:::
+
+---
+
+## ⭐ Spring 事务传播机制有哪些？分别什么场景用？
+
+**简要回答：** 7 种传播行为：REQUIRED（默认，加入当前事务）、REQUIRES_NEW（新建独立事务）、NESTED（嵌套事务，savepoint）、SUPPORTS（有事务就加入，没有就非事务执行）、NOT_SUPPORTED（非事务执行）、MANDATORY（必须在事务中调用）、NEVER（不能在事务中调用）。
+
+**深度分析：**
+
+```java
+@Service
+public class OrderService {
+    @Autowired
+    private InventoryService inventoryService;
+
+    // 外层事务
+    @Transactional(propagation = Propagation.REQUIRED)
+    public void createOrder() {
+        orderMapper.insert(order);
+        
+        // REQUIRES_NEW：独立事务，外层回滚不影响这里
+        inventoryService.deductInventory();  // 库存扣减在独立事务中
+        
+        // 如果这里抛异常，orderMapper 和后续操作回滚
+        // 但 inventoryService.deductInventory() 不会回滚（独立事务已提交）
+    }
+}
+
+@Service
+public class InventoryService {
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void deductInventory() {
+        inventoryMapper.deduct(productId, quantity);
+    }
+}
+```
+
+| 传播行为 | 外层有事务 | 外层无事务 | 典型场景 |
+|----------|:---------:|:---------:|----------|
+| **REQUIRED** | 加入外层事务 | 新建事务 | 大部分场景（默认） |
+| **REQUIRES_NEW** | 挂起外层，新建独立事务 | 新建事务 | 日志记录、独立操作 |
+| **NESTED** | 嵌套事务（savepoint） | 新建事务 | 部分回滚需求 |
+| **SUPPORTS** | 加入外层事务 | 非事务执行 | 查询方法 |
+| **NOT_SUPPORTED** | 挂起外层事务 | 非事务执行 | 不需要事务的操作 |
+| **MANDATORY** | 加入外层事务 | 抛异常 | 强制必须有事务 |
+| **NEVER** | 抛异常 | 非事务执行 | 强制不能有事务 |
+
+:::danger 面试追问
+- REQUIRES_NEW 事务回滚后外层事务会怎样？→ 外层事务感知不到 REQUIRES_NEW 的回滚（它们是独立的），但外层可以通过 try-catch 捕获异常来决定自己的行为
+- NESTED 和 REQUIRES_NEW 的本质区别？→ NESTED 在同一个物理事务中用 savepoint 实现部分回滚（效率高），REQUIRES_NEW 是完全独立的新事务（独立 Connection）
+- 事务传播失效的场景？→ 同类内部方法调用不走代理（AOP 限制），必须注入自身或用 `AopContext.currentProxy()`
+:::

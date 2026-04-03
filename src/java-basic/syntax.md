@@ -354,6 +354,12 @@ System.out.println(negative >>> 1);  // 2147483647，变成最大正整数
 
 ## 流程控制
 
+::: details switch vs if-else 的选择
+- **case 值离散且可枚举** → switch（编译器优化为 tableswitch/lookupswitch）
+- **条件是范围或复杂表达式** → if-else
+- **Java 14+** 可以用 switch 表达式 + 箭头语法，更简洁
+:::
+
 ### switch 的底层实现
 
 switch 不只是一个语法糖，JVM 对它有两种不同的字节码实现：
@@ -817,6 +823,13 @@ s.isEmpty()            // false，长度为 0 返回 true
 ```
 
 ## Java 新语法特性（Java 14 ~ 25）
+
+::: tip Java 版本选择建议
+- **企业级项目**：Java 17 LTS（长期支持，Spring Boot 3 最低要求）
+- **新项目/个人项目**：Java 21 LTS（Record、Pattern Matching、Virtual Threads）
+- **学习探索**：Java 23/25（最新特性预览）
+- **避免**：Java 8 新项目（已停止免费更新，缺少现代语言特性）
+:::
 
 如果你还在用 Java 8 的语法写代码，下面这些新特性能显著提升开发体验：
 

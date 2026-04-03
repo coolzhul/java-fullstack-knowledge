@@ -383,6 +383,14 @@ method.setAccessible(true);
 
 ## 动态代理原理
 
+::: details 动态代理的应用场景
+- **Spring AOP**：通过动态代理实现事务管理、日志、权限校验等横切关注点
+- **RPC 框架**：Dubbo、Feign 通过代理实现远程方法调用的透明化
+- **MyBatis**：Mapper 接口的代理实现，将方法调用映射为 SQL 执行
+- **Mock 测试**：Mockito 通过动态代理生成 Mock 对象
+- **缓存框架**：Spring Cache 通过代理实现缓存逻辑的透明注入
+:::
+
 动态代理是反射最重要的应用之一，是 AOP、RPC 框架的技术基础。
 
 ### JDK 动态代理
@@ -630,6 +638,13 @@ public class JUnitRunner {
 
 ## 反射的安全风险和限制
 
+::: warning 反射安全清单
+1. **不要对外暴露 `setAccessible(true)` 的能力**——攻击者可以通过反射修改 private final 字段、调用 private 方法
+2. **Java 9+ 模块化限制**：反射默认无法访问其他模块的 internal 类，需要 `--add-opens` 参数
+3. **性能监控**：在高频路径使用反射时，监控 Method.invoke 的耗时，考虑缓存 Method 对象
+4. **替代方案优先**：能用 MethodHandle 就不用反射，能用编译期生成（Annotation Processor）就不用运行时反射
+:::
+
 ### 安全风险
 
 ```java
@@ -789,3 +804,120 @@ mindmap
 | 模块化限制？ | 需要 `--add-opens` 或 `opens` 声明 |
 
 反射是 Java 生态系统的基石技术。理解它的工作原理，不仅有助于编写高效的代码，更能帮助你深入理解 Spring、MyBatis、Hibernate 等框架的底层机制。
+
+### JDK 动态代理 vs CGLIB 代理底层对比
+
+```mermaid
+graph TB
+    subgraph "JDK 动态代理"
+        A1["实现 InvocationHandler 接口"] --> A2["Proxy.newProxyInstance()"]
+        A2 --> A3["运行时生成 $Proxy0.class"]
+        A3 --> A4["调用 handler.invoke()"]
+        A5["限制：只能代理接口"] -.-> A2
+    end
+    
+    subgraph "CGLIB 代理"
+        B1["实现 MethodInterceptor 接口"] --> B2["Enhancer.create()"]
+        B2 --> B3["运行时生成子类（ASM 字节码生成）"]
+        B3 --> B4["调用 interceptor.intercept()"]
+        B5["可代理类（包括无接口的类）"] -.-> B2
+        B6["final 类/方法不能代理"] -.-> B2
+    end
+    
+    style A3 fill:#eaf2f8,stroke:#2980b9
+    style B3 fill:#eafaf1,stroke:#27ae60
+```
+
+```java
+// JDK 动态代理：基于接口
+public class JdkProxyDemo {
+    public static void main(String[] args) {
+        // $Proxy0 是运行时生成的字节码，实现了目标接口
+        // 调用任何方法都会被转发到 InvocationHandler.invoke()
+        UserService proxy = (UserService) Proxy.newProxyInstance(
+            UserService.class.getClassLoader(),
+            new Class[]{UserService.class},
+            (proxyObj, method, args1) -> {
+                System.out.println("before: " + method.getName());
+                Object result = method.invoke(target, args1);
+                System.out.println("after: " + method.getName());
+                return result;
+            }
+        );
+    }
+}
+
+// CGLIB 代理：基于继承
+public class CglibDemo {
+    public static void main(String[] args) {
+        Enhancer enhancer = new Enhancer();
+        enhancer.setSuperclass(UserServiceImpl.class);  // 设置父类
+        enhancer.setCallback((MethodInterceptor) (obj, method, args1, proxy) -> {
+            System.out.println("before: " + method.getName());
+            Object result = proxy.invokeSuper(obj, args1);  // 调用父类方法
+            System.out.println("after: " + method.getName());
+            return result;
+        });
+        UserServiceImpl proxy = (UserServiceImpl) enhancer.create();
+    }
+}
+```
+
+| 对比项 | JDK 动态代理 | CGLIB |
+|--------|-------------|-------|
+| 原理 | 基于接口（Proxy + InvocationHandler） | 基于继承（生成子类） |
+| 要求 | 目标必须实现接口 | 目标不能是 final 类 |
+| 性能 | JDK 8+ 性能已优化，接近 CGLIB | 创建代理慢，调用快 |
+| 依赖 | JDK 内置 | 需要第三方库 |
+| Spring 默认 | 有接口时使用 | 无接口时使用 |
+
+### 反射性能基准测试
+
+```java
+// JMH 基准测试结论（大致参考值）
+// 1. 直接调用：基准 1x
+// 2. 反射调用（无缓存 Method）：~50-100x 慢
+// 3. 反射调用（缓存 Method + setAccessible）：~7-15x 慢
+// 4. MethodHandle：~3-5x 慢
+// 5. LambdaMetafactory（动态生成 Lambda）：~1-2x 慢
+
+// 性能优化最佳实践
+class CachedMethodAccess {
+    private final Method method;
+    
+    CachedMethodAccess(Class<?> clazz, String methodName, Class<?>... paramTypes) 
+        throws Exception {
+        method = clazz.getDeclaredMethod(methodName, paramTypes);
+        method.setAccessible(true);  // 跳过访问检查，性能提升显著
+    }
+    
+    Object invoke(Object target, Object... args) throws Exception {
+        return method.invoke(target, args);  // 缓存 Method 对象
+    }
+}
+```
+
+### 反射安全问题
+
+```java
+// 1. setAccessible(true) 绕过访问控制
+Field f = String.class.getDeclaredField("value");
+f.setAccessible(true);  // 可以访问 private 字段！
+char[] chars = (char[]) f.get("hello");
+
+// 2. Java 9+ 模块系统的限制
+// --add-opens java.base/java.lang=ALL-UNNAMED
+// 在 module-info.java 中声明：opens java.lang to com.example;
+
+// 3. 反序列化漏洞（Gadget Chain）
+// 恶意序列化数据 + 反射 = 远程代码执行
+// 防御：ObjectInputFilter（JDK 9+）、白名单反序列化
+```
+
+:::warning 反射安全建议
+1. 生产环境慎用 `setAccessible(true)`，它会绕过 JVM 的访问控制
+2. 反序列化时使用 `ObjectInputFilter` 限制可反序列化的类
+3. Java 9+ 模块系统默认不允许反射访问内部 API，需要 `--add-opens` 显式开放
+4. 不要将用户输入作为反射参数（类名、方法名），防止注入攻击
+:::
+

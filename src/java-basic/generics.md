@@ -38,6 +38,29 @@ String s = list.get(0);  // 不需要强转
 
 这是 Java 泛型最大的"坑"，也是和其他语言（C#、Kotlin）泛型最大的区别：
 
+```mermaid
+graph LR
+    subgraph "源代码"
+        A["List&lt;String&gt; list = new ArrayList&lt;&gt;()"]
+    end
+    
+    subgraph "编译期"
+        B["类型检查<br/>确保只能 add(String)"]
+        C["类型擦除<br/>List&lt;String&gt; → List"]
+    end
+    
+    subgraph "运行期"
+        D["ArrayList<br/>内部 Object[]<br/>无泛型信息"]
+    end
+    
+    A --> B --> C --> D
+    
+    style A fill:#eaf2f8,stroke:#2980b9
+    style B fill:#fef9e7,stroke:#f39c12
+    style C fill:#fdedec,stroke:#e74c3c
+    style D fill:#eafaf1,stroke:#27ae60
+```
+
 ```java
 // 你写的代码
 public class Box<T> {
@@ -278,6 +301,20 @@ System.out.println(max(names));  // Charlie（字典序最大）
 ### PECS 原则——泛型通配符的核心法则
 
 这是《Effective Java》中最经典的法则之一，搞懂了它就搞懂了泛型通配符：
+
+```mermaid
+graph TD
+    A["PECS 原则"] --> B["Producer Extends<br/>生产者用 extends"]
+    A --> C["Consumer Super<br/>消费者用 super"]
+    
+    B --> D["场景：从集合读取<br/>List&lt;? extends Number&gt; nums<br/>✅ Number n = nums.get(0)<br/>❌ nums.add(new Integer(1))"]
+    
+    C --> E["场景：向集合写入<br/>List&lt;? super Integer&gt; nums<br/>✅ nums.add(new Integer(1))<br/>❌ Integer n = nums.get(0)"]
+    
+    style A fill:#eaf2f8,stroke:#2980b9
+    style B fill:#eafaf1,stroke:#27ae60
+    style C fill:#fef9e7,stroke:#f39c12
+```
 
 ```
 PECS = Producer Extends, Consumer Super
@@ -652,6 +689,107 @@ Producer Extends, Consumer Super。从集合中读取（生产者）用 `<? exte
 **Q5：TypeToken / TypeReference 的原理是什么？**
 
 通过创建匿名内部类（如 `new TypeToken<List<String>>() {}`），利用编译器必须在字节码中保留父类泛型签名（Signature 属性）的机制，在运行时通过 `getGenericSuperclass()` 反射获取实际类型参数。Gson、Jackson、Guava 都使用了这个技巧。
+
+
+### 泛型擦除深度解析
+
+#### 类型擦除规则
+
+```java
+// 编译前
+public class Container<T> {
+    private T value;
+    public T getValue() { return value; }
+    public void setValue(T value) { this.value = value; }
+}
+
+// 编译后（类型擦除后）
+public class Container {
+    private Object value;
+    public Object getValue() { return value; }
+    public void setValue(Object value) { this.value = value; }
+}
+
+// 有上界的情况
+public class NumberContainer<T extends Number> {
+    private T value;
+    // 擦除后 T 变为 Number，而不是 Object
+}
+```
+
+#### 桥接方法（Bridge Method）
+
+```java
+public class StringList extends ArrayList<String> {
+    @Override
+    public String get(int index) { return super.get(index); }
+}
+
+// 编译器自动生成桥接方法（保持多态兼容）
+// public Object get(int index) { return get(index); } // 桥接方法，调用原始方法
+```
+
+:::warning 类型擦除的常见陷阱
+1. **不能创建泛型数组**：`new T[10]` 编译错误，因为擦除后变成 `new Object[10]`
+2. **instanceof 不支持泛型**：`if (obj instanceof List<String>)` 编译错误
+3. **不能 catch 泛型异常**：`catch (T e)` 编译错误
+4. **重载冲突**：`void f(List<String>)` 和 `void f(List<Integer>)` 擦除后签名相同，编译错误
+:::
+
+### PECS 原则实战
+
+```java
+// PECS: Producer Extends, Consumer Super
+
+// 场景1：从集合读取（生产者）→ extends
+public static double sum(Collection<? extends Number> nums) {
+    double total = 0;
+    for (Number n : nums) total += n.doubleValue(); // 读取为 Number
+    return total;
+}
+// 可以传入 List<Integer>、List<Double>、List<Long>
+
+// 场景2：向集合写入（消费者）→ super
+public static void addNumbers(Collection<? super Integer> list) {
+    list.add(1);
+    list.add(2);
+    list.add(3);
+}
+// 可以传入 List<Integer>、List<Number>、List<Object>
+
+// 场景3：既读又写 → 不用通配符
+public static void copy(List<Integer> src, List<Integer> dest) {
+    dest.addAll(src);
+}
+
+// JDK 源码中的 PECS
+// Collections.copy: public static <T> void copy(List<? super T> dest, List<? extends T> src)
+// Collections.addAll: public static <T> boolean addAll(Collection<? super T> c, T... elements)
+```
+
+### 泛型与反射的交互
+
+```java
+// 通过反射绕过泛型检查（⚠️ 不安全，但可以做到）
+List<String> strList = new ArrayList<>();
+strList.add("hello");
+
+// 利用反射在运行时插入非 String 元素
+Method addMethod = List.class.getMethod("add", Object.class);
+addMethod.invoke(strList, 123);  // 编译通过，运行通过！
+// strList 现在包含 "hello" 和 123
+// 后续 strList.get(1) 会导致 ClassCastException
+
+// 获取运行时泛型信息（通过 Signature 属性）
+public class GenericType<T> {
+    public Type getType() {
+        // 匿名子类可以保留泛型信息
+        return new TypeReference<T>() {}.getType();
+    }
+}
+// 原理：编译器在字节码的 Signature 属性中保留声明处的泛型信息
+```
+
 
 ## 延伸阅读
 

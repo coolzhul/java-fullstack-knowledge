@@ -29,6 +29,10 @@ timeline
 
 ## Java 8 - 函数式编程革命
 
+::: tip Java 8 是 Java 历史上最重要的版本
+Java 8（2014）引入了 Lambda、Stream、Optional、CompletableFuture、新日期 API 等重大特性，彻底改变了 Java 的编程风格。如果你还在用 Java 7 风格写代码，强烈建议升级。
+:::
+
 ### Lambda 表达式
 ```java
 // 传统匿名内部类
@@ -220,6 +224,12 @@ Map<String, Integer> map2 = Map.of(
 
 ### instanceof 模式匹配（预览）
 ```java
+
+:::info 模式匹配优势
+传统 instanceof 写法：`if (obj instanceof String) { String s = (String) obj; }`
+模式匹配写法：`if (obj instanceof String s) { /* 直接使用 s */ }`
+一行搞定类型检查 + 类型转换，减少样板代码，也更安全（变量作用域最小化）
+:::
 // Java 14 之前的写法
 Object obj = "Hello";
 if (obj instanceof String) {
@@ -255,6 +265,15 @@ flowchart LR
 
 ### Records（记录类）
 ```java
+
+:::info Record 的限制
+1. 不能继承其他类（隐式继承 java.lang.Record）
+2. 可以实现接口
+3. 字段不可变（没有 setter）
+4. 可以自定义规范方法（equals/hashCode/toString）
+5. 可以定义实例方法和静态方法
+6. 可以定义紧凑构造器（Compact Constructor）进行参数校验
+:::
 // 传统类
 class Person {
     private final String name;
@@ -351,6 +370,12 @@ String result = switch (day) {
         yield "Weekday";
     }
     case 6, 7 -> {
+
+:::info 虚拟线程 vs 平台线程
+平台线程（传统 Thread）：1:1 映射 OS 线程，创建成本高，数量受限（通常几千）
+虚拟线程：M:N 映射（大量虚拟线程 → 少量载体线程），创建成本极低，轻松百万级
+适用场景：I/O 密集型（HTTP 请求、数据库查询）；不适合：CPU 密集型（计算任务）
+:::
         System.out.println("Weekend");
         yield "Weekend";
     }
@@ -359,6 +384,10 @@ String result = switch (day) {
 ```
 
 ## Java 19+ - 虚拟线程和文本块
+
+::: tip 虚拟线程 vs 传统线程
+虚拟线程是 Java 21 正式引入的轻量级线程，由 JVM 调度而非操作系统。每个虚拟线程只占用几百字节内存（vs 传统线程 1MB 栈），可以轻松创建百万个虚拟线程。适合 I/O 密集型任务（HTTP 请求、数据库查询），不适合 CPU 密集型计算。
+:::
 
 ### 虚拟线程（Virtual Threads）
 ```java

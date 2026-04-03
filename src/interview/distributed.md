@@ -434,3 +434,56 @@ flowchart TD
 - RocketMQ 事务消息的原理？→ 半消息 → 执行本地事务 → 提交/回滚 → 回查机制
 - Kafka 的零拷贝原理？→ sendfile 系统调用，数据从磁盘直接到网卡，跳过用户空间
 :::
+
+---
+
+## ⭐ 分布式锁有哪些实现方案？Redis 和 ZooKeeper 怎么选？
+
+**简要回答：** 常见方案：Redis（SETNX + 过期时间）、Redisson（Redis 分布式锁框架，支持可重入、看门狗续期）、ZooKeeper（临时顺序节点 + Watch）、MySQL（唯一索引 + 行锁）。选型：高性能场景选 Redis，一致性要求高选 ZooKeeper。
+
+**深度分析：**
+
+```java
+// Redis 基础分布式锁
+String lockKey = "lock:order:" + orderId;
+String lockValue = UUID.randomUUID().toString();
+// SET key value NX EX 30（原子操作）
+Boolean locked = stringRedisTemplate.opsForValue()
+    .setIfAbsent(lockKey, lockValue, 30, TimeUnit.SECONDS);
+if (Boolean.TRUE.equals(locked)) {
+    try {
+        // 执行业务
+    } finally {
+        // Lua 脚本保证解锁的原子性（对比 value 防止误删）
+        String lua = "if redis.call('get', KEYS[1]) == ARGV[1] " +
+                     "then return redis.call('del', KEYS[1]) " +
+                     "else return 0 end";
+        stringRedisTemplate.execute(
+            new DefaultRedisScript<>(lua, Long.class),
+            Collections.singletonList(lockKey), lockValue);
+    }
+}
+
+// Redisson 可重入分布式锁（推荐）
+RLock lock = redisson.getLock("lock:order:" + orderId);
+lock.lock();  // 看门狗自动续期（默认 30s，每 10s 续期）
+try {
+    // 执行业务
+} finally {
+    lock.unlock();
+}
+```
+
+| 方案 | 性能 | 一致性 | 可重入 | 看门狗 | 适用场景 |
+|------|:----:|:-----:|:-----:|:-----:|----------|
+| Redis SETNX | ⭐⭐⭐⭐ | ⭐⭐ | ❌ | ❌ | 简单场景 |
+| Redisson | ⭐⭐⭐⭐ | ⭐⭐⭐ | ✅ | ✅ | 大部分场景 |
+| ZooKeeper | ⭐⭐ | ⭐⭐⭐⭐ | ✅ | ✅ | 强一致性要求 |
+| MySQL | ⭐ | ⭐⭐⭐⭐⭐ | ❌ | ❌ | 已有 MySQL 的简单场景 |
+
+:::danger 面试追问
+- Redis 锁的过期时间怎么设？→ 根据业务执行时间设置，建议用 Redisson 看门狗自动续期
+- Redis 主从切换时锁会丢失吗？→ 会。Redis 主从异步复制，主节点加锁后宕机，锁数据未同步到从节点。解决方案：RedLock（多节点）或用 ZooKeeper
+- ZooKeeper 分布式锁的原理？→ 创建临时顺序节点，判断自己是否是最小序号节点，不是则 Watch 前一个节点。Session 过期自动释放锁
+- Redisson 的看门狗机制？→ 默认 lock 30s，看门狗每 10s 检查锁是否还持有，是则续期到 30s。如果客户端宕机，看门狗停止续期，锁自动过期
+:::

@@ -466,3 +466,88 @@ private static final ThreadLocal<UserInfo> USER_CONTEXT =
 - ThreadLocal 和 synchronized 有什么区别？→ ThreadLocal 是空间换时间（每个线程一份数据），synchronized 是时间换空间（共享数据加锁）
 - Spring 事务管理中 ThreadLocal 的作用？→ 通过 ThreadLocal 保存当前线程的数据库连接，保证同一个事务中使用同一个 Connection
 :::
+
+---
+
+## ⭐ HashMap 底层原理？
+
+**简要回答：** JDK 8 中 HashMap 底层是 **数组 + 链表 + 红黑树**。通过 hash 值定位数组下标，链表解决哈希冲突，链表长度 ≥ 8 且数组 ≥ 64 时转为红黑树。
+
+**深度分析：**
+
+```mermaid
+flowchart TD
+    A["put(key, value)"] --> B["计算 hash = (h = key.hashCode()) ^ (h >>> 16)"]
+    B --> C["定位桶：index = (n - 1) & hash"]
+    C --> D{桶为空?}
+    D -->|是| E["直接插入新节点"]
+    D -->|否| F{是红黑树?}
+    F -->|是| G["红黑树插入"]
+    F -->|否| H["遍历链表"]
+    H --> I{key 已存在?}
+    I -->|是| J["更新 value"]
+    I -->|否| K["尾部插入"]
+    K --> L{链表长度 ≥ 8<br/>且数组 ≥ 64?}
+    L -->|是| M["树化为红黑树"]
+    L -->|否| N["插入完成"]
+    E --> O{size > threshold?}
+    M --> O
+    N --> O
+    J --> O
+    O -->|是| P["resize() 扩容为 2 倍"]
+    O -->|否| Q["插入完成"]
+```
+
+| 要点 | 说明 |
+|------|------|
+| 默认容量 | 16，负载因子 0.75 |
+| hash 计算 | 扰动函数：`hashCode() ^ (hashCode() >>> 16)`，减少碰撞 |
+| 扩容 | 2 倍扩容，通过 `hash & oldCap` 一位判断新位置 |
+| 树化 | 链表 ≥ 8 且数组 ≥ 64 → 红黑树；节点 ≤ 6 → 退化为链表 |
+| 线程安全 | HashMap 非线程安全，并发用 ConcurrentHashMap |
+
+:::tip 面试追问
+- **为什么容量必须是 2 的幂？** 方便用位运算 `&` 代替取模 `%`，效率更高
+- **JDK 7 vs JDK 8**：JDK 7 头插法（多线程可能死循环），JDK 8 尾插法
+- **负载因子为什么是 0.75？** 泊松分布，0.75 是时间和空间的平衡点
+:::
+
+---
+
+## ⭐ String 为什么不可变？有什么好处？
+
+**简要回答：** String 被 `final` 修饰，内部 `char[]`（JDK 9+ 是 `byte[]`）是 `private final` 的，没有修改方法。不可变带来线程安全、String Pool 优化、安全性。
+
+**深度分析：**
+
+```java
+public final class String implements Serializable, Comparable<String> {
+    private final byte[] value;  // JDK 9+ 改为 byte[] + coder，节省内存
+    private final int coder;     // LATIN1 = 0, UTF16 = 1
+}
+```
+
+**不可变的深层原因：**
+
+| 好处 | 说明 |
+|------|------|
+| **String Pool** | 相同字符串共享一个实例，节省内存。如果可变，一处修改全局受影响 |
+| **线程安全** | 天然不可变，多线程共享无需同步 |
+| **安全性** | 作为 HashMap 的 key、网络参数、文件路径等，防止被篡改 |
+| **类加载** | 类名作为 String 存储在常量池，可变会导致类加载混乱 |
+
+:::warning String 常见陷阱
+1. **String s = "hello"** vs **String s = new String("hello")**：前者在常量池，后者在堆上
+2. **字符串拼接**：循环中用 `+` 拼接会创建大量临时对象，用 `StringBuilder`
+3. **intern()**：将字符串放入常量池并返回引用，JDK 7+ 常量池移到堆中
+:::
+
+**String vs StringBuilder vs StringBuffer：**
+
+| 特性 | String | StringBuilder | StringBuffer |
+|------|--------|--------------|-------------|
+| 可变性 | 不可变 | 可变 | 可变 |
+| 线程安全 | 天然安全 | 不安全 | 安全（synchronized） |
+| 性能 | 拼接慢 | 最快 | 比 StringBuilder 慢 |
+| 使用场景 | 少量拼接 | 单线程拼接 | 多线程拼接 |
+

@@ -410,3 +410,93 @@ User user = getCacheData("user:123", User.class, () -> userMapper.selectById(123
 - 什么是缓存预热？→ 系统启动或定时任务提前加载热点数据到缓存
 - 大流量下 Redis 挂了怎么办？→ 多级缓存（本地缓存 + Redis）、限流降级、Redis 高可用集群
 :::
+
+---
+
+## ⭐ MySQL 索引失效的常见场景？
+
+**简要回答：** 索引失效的常见原因：对索引列使用函数、隐式类型转换、违反最左前缀原则、使用 `OR` 连接非索引列、`LIKE '%abc'` 前缀通配符、`NOT IN`/`NOT EXISTS`、`IS NOT NULL`（部分版本）、优化器判断全表扫描更快。
+
+**深度分析：**
+
+```sql
+-- ❌ 1. 对索引列使用函数
+SELECT * FROM user WHERE YEAR(created_at) = 2024;
+-- ✅ 改为范围查询
+SELECT * FROM user WHERE created_at >= '2024-01-01' AND created_at < '2025-01-01';
+
+-- ❌ 2. 隐式类型转换
+SELECT * FROM user WHERE phone = 13800138000;  -- phone 是 VARCHAR，传入数字
+-- ✅ 加引号
+SELECT * FROM user WHERE phone = '13800138000';
+
+-- ❌ 3. 违反最左前缀
+-- 索引 idx(a, b, c)
+SELECT * FROM t WHERE b = 1 AND c = 2;  -- 跳过了 a
+-- ✅ 
+SELECT * FROM t WHERE a = 1 AND b = 2 AND c = 3;
+
+-- ❌ 4. LIKE 左前缀通配
+SELECT * FROM user WHERE name LIKE '%张';
+-- ✅ 右前缀通配可以走索引
+SELECT * FROM user WHERE name LIKE '张%';
+
+-- ❌ 5. OR 连接非索引列
+SELECT * FROM user WHERE age = 25 OR name = '张三';
+-- ✅ 各自独立查询 UNION
+SELECT * FROM user WHERE age = 25 UNION SELECT * FROM user WHERE name = '张三';
+
+-- ❌ 6. NOT IN（小表除外）
+SELECT * FROM user WHERE age NOT IN (20, 25, 30);
+-- ✅ 用 NOT EXISTS 或 LEFT JOIN
+SELECT * FROM user u WHERE NOT EXISTS (SELECT 1 FROM exclude e WHERE e.age = u.age);
+```
+
+:::danger 面试追问
+- 怎么确认索引是否生效？→ 用 `EXPLAIN` 查看 `type`（不应是 ALL）、`key`（使用的索引）、`rows`（扫描行数）
+- 优化器什么时候会选择全表扫描？→ 当表数据量小、索引区分度低、查询返回比例超过 30% 时，全表扫描可能比索引回表更快
+- `!=` 会让索引失效吗？→ 不一定。MySQL 8.0 优化器对 `!=` 有优化，如果走索引成本更低仍然会使用索引
+:::
+
+---
+
+## ⭐ MVCC 多版本并发控制原理？
+
+**简要回答：** MVCC（Multi-Version Concurrency Control）是 InnoDB 引擎实现事务隔离的机制，通过隐藏列（trx_id, roll_pointer）、Undo Log 链和 Read View 实现读不加锁。RC 级别每次 SELECT 创建新 Read View，RR 级别事务第一次 SELECT 创建 Read View 后复用。
+
+**深度分析：**
+
+```mermaid
+graph TD
+    subgraph "MVCC 核心组件"
+        A["隐藏列<br/>trx_id（事务ID）<br/>roll_pointer（回滚指针）"]
+        B["Undo Log 版本链<br/>旧版本数据通过 roll_pointer 串联"]
+        C["Read View<br/>活跃事务 ID 列表<br/>决定可见性"]
+    end
+    
+    subgraph "可见性判断规则"
+        D{"trx_id < min_trx_id?"}
+        E{"trx_id >= max_trx_id?"}
+        F{"trx_id 在 m_ids 中?"}
+    end
+    
+    A --> D
+    D -->|"是：可见<br/>（事务已提交）"| G["✅ 返回此版本"]
+    D -->|"否"| E
+    E -->|"是：不可见<br/>（事务在 Read View 之后开始）"| H["❌ 沿 Undo Log 找上一个版本"]
+    E -->|"否"| F
+    F -->|"是：不可见<br/>（事务未提交）"| H
+    F -->|"否：可见<br/>（事务在 Read View 创建前提交）"| G
+    H --> D
+```
+
+| 隔离级别 | Read View 创建时机 | 特点 |
+|----------|-------------------|------|
+| READ COMMITTED (RC) | 每次 SELECT 创建新的 | 每次读到最新已提交数据，不可重复读 |
+| REPEATABLE READ (RR) | 事务第一次 SELECT 创建，后续复用 | 同一事务内读到一致快照，可重复读 |
+
+:::danger 面试追问
+- RR 级别能完全避免幻读吗？→ 不能。快照读（普通 SELECT）避免了幻读，但当前读（`SELECT ... FOR UPDATE`）仍然可能幻读。InnoDB 通过 Gap Lock（间隙锁）来防止幻读
+- Undo Log 什么时候清理？→ Purge 线程在没有任何活跃的 Read View 引用旧版本时清理
+- MVCC 和锁是什么关系？→ MVCC 解决读写冲突（读不加锁），锁解决写写冲突（悲观锁）和写读冲突（当前读）
+:::

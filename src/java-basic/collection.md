@@ -111,6 +111,12 @@ list.forEach(s -> System.out.println(s));
 
 ## ArrayList——不只是"动态数组"
 
+::: details ArrayList vs Vector
+- **Vector** 是线程安全的（所有方法加 synchronized），但性能差，已被淘汰
+- **ArrayList** 是非线程安全的，需要外部同步时用 `Collections.synchronizedList()` 或 `CopyOnWriteArrayList`
+- JDK 1.2 引入 Collections 框架后，Vector 仅为了向后兼容而保留
+:::
+
 ### 扩容机制
 
 ArrayList 的核心就是一个 `Object[]` 数组，当空间不够时就**创建一个更大的数组，把旧数据拷贝过去**。
@@ -488,6 +494,14 @@ public class LinkedHashSet<E> extends HashSet<E> {
 
 ## Queue 与 Deque——队列和双端队列
 
+::: tip 队列选型指南
+- **普通队列（FIFO）** → `ArrayDeque`（环形数组，性能最优）
+- **优先队列** → `PriorityQueue`（堆结构，按优先级出队）
+- **线程安全队列** → `ConcurrentLinkedQueue`（无锁 CAS）、`LinkedBlockingQueue`（有界阻塞）
+- **延迟队列** → `DelayQueue`（元素到期才能取出，适合定时任务）
+- **双端队列** → `ArrayDeque`（推荐）或 `LinkedList`（支持 null）
+:::
+
 ### Queue 接口
 
 ```java
@@ -836,6 +850,114 @@ HashSet 内部完全依赖 HashMap。add(e) 实际上是 map.put(e, PRESENT)，c
 **Q6：PriorityQueue 的底层原理？**
 
 PriorityQueue 底层是一个最小堆（完全二叉树），用数组存储。插入时 siftUp 上浮到合适位置，删除时用最后一个元素替换堆顶然后 siftDown 下沉。插入和删除都是 O(log n)，查看堆顶是 O(1)。
+
+
+### HashMap 扩容机制深度解析
+
+#### JDK 8 扩容流程
+
+```mermaid
+flowchart TB
+    A["put() 添加元素"] --> B{"size > capacity × loadFactor?<br/>默认 16 × 0.75 = 12"}
+    B -->|否| C["插入完成"]
+    B -->|是| D["resize() 扩容"]
+    D --> E["创建新数组<br/>容量 × 2（16→32→64...）"]
+    E --> F["遍历旧数组所有桶"]
+    F --> G{"桶中元素如何迁移？"}
+    G -->|链表| H["拆分为高低位链表<br/>hash & oldCap == 0 → 原位置<br/>hash & oldCap != 0 → 原位置 + oldCap"]
+    G -->|红黑树| I["拆分或退化为链表<br/>节点数 ≤ 6 退化为链表<br/>节点数 ≥ 8 重新树化"]
+    H --> F
+    I --> F
+    F -->|遍历完| J["table 指向新数组<br/>threshold 更新"]
+    
+    style D fill:#fdedec,stroke:#e74c3c
+    style H fill:#eafaf1,stroke:#27ae60
+```
+
+:::tip JDK 8 扩容优化
+JDK 7 扩容时采用头插法（并发下可能死循环），JDK 8 改为尾插法解决并发问题。同时利用 `hash & oldCap` 一位判断，将一次 resize 从 O(n×桶长) 优化到 O(n)，每个元素只需判断一个 bit 就能确定新位置。
+:::
+
+### ConcurrentHashMap——并发安全的 HashMap
+
+#### JDK 7 vs JDK 8 架构对比
+
+```mermaid
+graph LR
+    subgraph "JDK 7: 分段锁 Segment"
+        A1["Segment[0]"] --> B1["HashEntry[]"]
+        A2["Segment[1]"] --> B2["HashEntry[]"]
+        A3["Segment[2]"] --> B3["HashEntry[]"]
+        A4["..."] --> B4["..."]
+        A1 -.->|"synchronized"| A1
+        A2 -.->|"synchronized"| A2
+    end
+    
+    subgraph "JDK 8: CAS + synchronized"
+        C1["Node[0]"]
+        C2["Node[1]"]
+        C3["Node[2]"]
+        C4["Node[3]"]
+        C5["..."]
+        C1 -.->|"CAS/sync<br/>锁粒度=桶"| C1
+        C2 -.->|"CAS/sync"| C2
+    end
+```
+
+| 特性 | JDK 7 | JDK 8 |
+|------|-------|-------|
+| 锁粒度 | Segment（默认 16 个） | 桶级别（Node） |
+| 最大并发 | 16 | 等于桶数量 |
+| 数据结构 | 数组 + 链表 | 数组 + 链表 + 红黑树 |
+| 同步方式 | ReentrantLock | CAS + synchronized |
+| 扩容 | 每个 Segment 独立扩容 | 多线程协同扩容（transfer） |
+
+```java
+// JDK 8 putVal 核心逻辑（简化）
+if ((tab = table) == null || (n = (length = tab.length)) == 0)
+    tab = initTable();  // CAS 初始化
+
+if ((f = tabAt(tab, i = (n - 1) & hash)) == null)
+    casTabAt(tab, i, null, new Node<K,V>(hash, key, value));  // CAS 写入空桶
+else if (fh >= 0) {
+    synchronized (f) {  // 锁住头节点（桶级别锁）
+        // 链表操作...
+    }
+} else if (f instanceof TreeBin) {
+    // 红黑树操作（使用 TreeBin 自带的读写锁）
+}
+addCount(1L, binCount);  // CAS 更新 size，触发扩容检查
+```
+
+### Collections 工具类常用方法
+
+```java
+// 线程安全包装（装饰器模式）
+List<String> syncList = Collections.synchronizedList(new ArrayList<>());
+Set<String> syncSet = Collections.synchronizedSet(new HashSet<>());
+Map<String, String> syncMap = Collections.synchronizedMap(new HashMap<>());
+
+// 不可变集合（防御性拷贝）
+List<String> immutable = Collections.unmodifiableList(existingList);
+
+// 排序与查找
+Collections.sort(list);
+Collections.binarySearch(list, target);  // 前提：list 已排序
+Collections.reverse(list);
+Collections.shuffle(list);
+
+// 批量操作
+Collections.fill(list, "default");
+Collections.frequency(list, "target");
+Collections.disjoint(list1, list2);  // 无交集返回 true
+```
+
+:::warning Collections.synchronizedXxx 的坑
+1. **复合操作不安全**：`if (!list.isEmpty()) list.add(e)` 仍需手动同步
+2. **迭代器需要手动同步**：`synchronized (list) { for (String s : list) {...} }`
+3. **推荐替代**：`CopyOnWriteArrayList`（读多写少）、`ConcurrentHashMap`（高并发 Map）
+:::
+
 
 ## 延伸阅读
 

@@ -17,6 +17,10 @@ tag:
 
 ## 基础入门：AOP 概念
 
+::: tip AOP 的核心价值
+AOP 解决的是 OOP 无法优雅处理的问题——**横切关注点**。日志、事务、权限、监控这些功能散落在各个业务类中，AOP 让你把这些"切面"统一管理，业务代码保持干净。一句话总结：AOP = 动态代理 + 切点匹配 + 通知执行。
+:::
+
 ### 什么是 AOP
 AOP（Aspect-Oriented Programming，面向切面编程）是一种编程范式，它将横切关注点（cross-cutting concerns）从业务逻辑中分离出来。横切关注点是指那些在多个模块中重复出现的功能，如日志记录、事务管理、安全检查、性能监控等。
 
@@ -62,6 +66,12 @@ public class UserService {
 ```
 
 ## AOP 底层实现原理
+
+::: details Spring AOP vs AspectJ 的区别
+- **Spring AOP**：运行时织入，基于动态代理（JDK/CGLIB），只支持方法级别的连接点
+- **AspectJ**：编译时/加载时织入，功能更强大（支持字段访问、构造器、异常等），需要额外编译器
+- 实际项目中 Spring AOP 覆盖 95% 的场景，只有在需要字段级切面或编译时检查时才考虑 AspectJ
+:::
 
 ### 动态代理机制
 Spring AOP 主要使用动态代理来实现，包括：
@@ -159,6 +169,12 @@ proxy.createUser(new User("Bob"));
 ```
 
 ### 代理选择策略
+
+:::warning AOP 代理的坑
+1. **同类方法内部调用**不会触发代理：`methodA()` 内部调用 `this.methodB()`，`methodB` 上的切面不会生效
+2. **private/final/static 方法**无法被代理：CGLIB 基于继承，这些方法无法重写
+3. **Spring Boot 2.x+ 默认用 CGLIB**：`spring.aop.proxy-target-class=true` 已是默认值
+:::
 ```java
 // Spring AOP 的代理选择策略
 public class AopProxySelector {
@@ -585,7 +601,17 @@ public class OrderService {
 
 ## AOP 失效场景和解决方案
 
+::: danger AOP 失效是面试和实际开发中的高频问题
+AOP 失效的根本原因都是**同一个类内部的方法调用没有经过代理对象**，直接 `this.method()` 调用的是原始对象，不走代理。记住这个原则，所有失效场景都能理解。
+:::
+
 ### 常见失效场景
+
+:::warning 自调用失效的解决方案
+**方案1：注入自己** `@Autowired private MyService self; self.methodB();`
+**方案2：AopContext** `((MyService) AopContext.currentProxy()).methodB();`（需开启 `@EnableAspectJAutoProxy(exposeProxy=true)`）
+**方案3：重构** 将 methodB 抽到另一个 Bean 中
+:::
 
 #### 1. 内部方法调用失效
 ```java
@@ -830,6 +856,12 @@ public class OptimizedAspect {
 ```
 
 ## Spring AOP 与 AspectJ 对比
+
+::: tip 选择建议
+- **90% 的项目**：用 Spring AOP 就够了（基于动态代理，集成简单）
+- **需要编译时检查**：用 AspectJ（如 `@DeclareParents` 接口默认实现、字段访问拦截）
+- **性能敏感场景**：AspectJ 编译时织入比 Spring AOP 运行时代理略快（差距通常可忽略）
+:::
 
 ### Spring AOP 特点
 ```java

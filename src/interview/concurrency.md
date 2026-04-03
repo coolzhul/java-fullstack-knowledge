@@ -203,3 +203,161 @@ public void process() {
 - 线程池场景下 ThreadLocal 有什么坑？→ 线程被复用，上一次的 ThreadLocal 值会被带到下一次任务，必须在 finally 中 remove
 - Spring 中哪里用到了 ThreadLocal？→ RequestContextHolder（保存当前请求）、TransactionSynchronizationManager（事务资源绑定）、@Scope("request")
 :::
+
+---
+
+## ⭐ StampedLock 是什么？和 ReentrantReadWriteLock 有什么区别？
+
+**简要回答：** StampedLock 是 JDK 8 引入的乐观读锁，支持乐观读、悲观读、写三种模式。相比 ReentrantReadWriteLock，它的读锁不会阻塞写锁（乐观模式下），适合读多写少且读操作很快的场景。
+
+**深度分析：**
+
+```java
+// StampedLock 的三种模式
+StampedLock lock = new StampedLock();
+
+// 1. 写锁（独占）
+long writeStamp = lock.writeLock();
+try {
+    // 修改共享数据
+    value = computeValue();
+} finally {
+    lock.unlockWrite(writeStamp);
+}
+
+// 2. 乐观读（不阻塞写锁！）
+long readStamp = lock.tryOptimisticRead();
+// 先读数据（不加锁）
+int currentValue = value;
+// 验证读期间是否有写操作
+if (!lock.validate(readStamp)) {
+    // 验证失败，升级为悲观读锁
+    readStamp = lock.readLock();
+    try {
+        currentValue = value;
+    } finally {
+        lock.unlockRead(readStamp);
+    }
+}
+
+// 3. 悲观读锁（共享锁）
+long readStamp = lock.readLock();
+try {
+    // 读取数据
+} finally {
+    lock.unlockRead(readStamp);
+}
+```
+
+**与 ReentrantReadWriteLock 对比：**
+
+| 维度 | ReentrantReadWriteLock | StampedLock |
+|------|:---:|:---:|
+| 读锁类型 | 悲观读 | 乐观读 + 悲观读 |
+| 读-写互斥 | 是（读锁阻塞写锁） | 否（乐观读不阻塞写锁） |
+| 写-写互斥 | 是 | 是 |
+| 支持条件变量 | ✅ newCondition() | ❌ |
+| 可重入 | ✅ | ❌ |
+| 支持锁降级 | ✅ 写→读 | ✅ 写→读 |
+| 性能 | 中等 | 高（乐观读零开销） |
+
+:::danger 面试追问
+- StampedLock 为什么不支持条件变量？→ 因为乐观读不持有锁，无法与 Condition 配合
+- StampedLock 为什么不可重入？→ 不可重入是设计选择，避免死锁复杂度。嵌套调用会死锁
+- 什么场景用 StampedLock？→ 读多写少、读操作很快（如缓存读取坐标点），不适合长时间持有锁
+:::
+
+---
+
+## ⭐ CompletableFuture 的核心 API 和异常处理？
+
+**简要回答：** CompletableFuture 是 Java 8 引入的异步编程工具，支持链式调用、组合多个异步任务、统一异常处理。核心方法：`supplyAsync()`、`thenApply()`、`thenCompose()`、`exceptionally()`、`allOf()`、`anyOf()`。
+
+**深度分析：**
+
+```java
+// 基本用法
+CompletableFuture<String> future = CompletableFuture.supplyAsync(() -> {
+    return fetchDataFromRemote();  // 异步执行
+}, executor);
+
+// 链式转换（thenApply）
+future.thenApply(data -> parse(data))
+      .thenApply(parsed -> transform(parsed))
+      .thenAccept(result -> System.out.println(result));
+
+// 组合两个异步任务（thenCompose - 扁平化）
+future.thenCompose(data -> CompletableFuture.supplyAsync(() -> enrich(data)))
+      .thenAccept(enriched -> save(enriched));
+
+// 并行执行多个任务
+CompletableFuture<String> f1 = CompletableFuture.supplyAsync(() -> fetchUser());
+CompletableFuture<String> f2 = CompletableFuture.supplyAsync(() -> fetchOrder());
+CompletableFuture<String> f3 = CompletableFuture.supplyAsync(() -> fetchPayment());
+
+// allOf：等待所有完成
+CompletableFuture.allOf(f1, f2, f3).join();
+
+// anyOf：任一完成即可
+CompletableFuture<Object> any = CompletableFuture.anyOf(f1, f2, f3);
+
+// 异常处理
+future.exceptionally(ex -> {
+    log.error("异步任务失败", ex);
+    return defaultValue;  // 降级返回
+});
+
+// handle：同时处理正常和异常
+future.handle((result, ex) -> {
+    if (ex != null) {
+        return fallbackValue;
+    }
+    return result;
+});
+```
+
+:::danger 面试追问
+- `thenApply` vs `thenCompose` 的区别？→ `thenApply` 接收同步函数（T→U），`thenCompose` 接收返回 CompletableFuture 的函数（T→CompletableFuture&lt;U&gt;），类似 `map` vs `flatMap`
+- `supplyAsync` 默认用什么线程池？→ `ForkJoinPool.commonPool()`，建议自定义线程池避免阻塞公共池
+- `join()` vs `get()` 的区别？→ `join()` 抛 unchecked 异常，`get()` 抛 checked 异常（需 try-catch）
+:::
+
+---
+
+## ⭐ CAS 和 ABA 问题？
+
+**简要回答：** CAS（Compare-And-Swap）是一种无锁并发原语，通过 CPU 指令原子性地比较并更新值。ABA 问题是 CAS 的经典缺陷——值从 A→B→A，CAS 误认为没变。
+
+**深度分析：**
+
+```java
+// CAS 原理：V(内存值) == A(期望值) ? V = B : 失败重试
+// Java 通过 Unsafe 类调用 CPU 的 cmpxchg 指令实现
+
+// ABA 问题演示
+AtomicInteger ref = new AtomicInteger(100);
+// 线程1：准备 CAS(100 → 200)
+// 线程2：CAS(100 → 101) → CAS(101 → 100)  // ABA!
+// 线程1执行 CAS：发现值还是 100，成功改为 200
+// 但实际上值已经被修改过了！
+
+// 解决方案：AtomicStampedReference（加版本号）
+AtomicStampedReference<Integer> stampedRef = new AtomicStampedReference<>(100, 0);
+int stamp = stampedRef.getStamp();
+stampedRef.compareAndSet(100, 200, stamp, stamp + 1);  // 同时比较值和版本号
+// 线程2修改后版本号变了，线程1的 CAS 失败
+```
+
+**CAS 三大问题总结：**
+
+| 问题 | 描述 | 解决方案 |
+|------|------|----------|
+| ABA | 值被改回原值 | `AtomicStampedReference` |
+| 自旋开销 | 长时间失败空转 | 限制自旋次数，用 `LongAdder` |
+| 单变量限制 | 无法原子操作多个变量 | `AtomicReference` 封装对象 |
+
+:::tip 面试追问
+- CAS 底层通过 `Unsafe.compareAndSwapInt` 调用 CPU 的 `LOCK CMPXCHG` 指令
+- Java 9+ 推荐使用 `VarHandle` 替代 `Unsafe`
+- `LongAdder` 在高竞争场景比 `AtomicLong` 性能好（分段 CAS，减少竞争）
+:::

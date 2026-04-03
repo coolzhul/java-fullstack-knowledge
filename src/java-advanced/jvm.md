@@ -138,6 +138,13 @@ java -Xss256k StackOverflowDemo  # 更容易触发
 
 ### 堆内存（Heap）
 
+
+:::warning OOM 排查黄金法则
+1. **-XX:+HeapDumpOnOutOfMemoryError**：OOM 时自动生成堆转储文件
+2. **-XX:HeapDumpPath=/path/to/dump.hprof**：指定转储文件路径
+3. 用 MAT（Memory Analyzer Tool）或 VisualVM 分析 hprof 文件
+4. 常见 OOM 原因：内存泄漏（未关闭资源）、大对象分配、内存不足配置过小
+:::
 ```mermaid
 graph TD
     subgraph "Java 堆"
@@ -166,6 +173,14 @@ graph TD
 -XX:SurvivorRatio=8 # Eden:S0:S1 = 8:1:1
 -XX:+UseTLAB        # 启用 TLAB（默认开启）
 ```
+
+:::warning Metaspace OOM 排查
+Metaspace 溢出通常原因：
+1. 动态生成大量类（CGLIB、JSP 编译、Groovy 脚本）
+2. 类加载器泄漏（Tomcat 热部署时旧 ClassLoader 未回收）
+3. 参数 `-XX:MaxMetaspaceSize=256m` 设置过小
+4. 排查工具：`jstat -gc` 查看 Metaspace 使用量，`jmap -clstats` 查看类加载统计
+:::
 
 ::: tip TLAB（Thread Local Allocation Buffer）
 每个线程在 Eden 区有一块私有分配缓冲区。新对象优先在 TLAB 中分配（指针碰撞），避免多线程竞争 Eden 区。TLAB 分配失败才到 Eden 区分配。可以通过 `-XX:TLABSize` 手动设置 TLAB 大小。
