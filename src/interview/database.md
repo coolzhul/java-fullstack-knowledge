@@ -413,53 +413,6 @@ User user = getCacheData("user:123", User.class, () -> userMapper.selectById(123
 
 ---
 
-## ⭐ MySQL 索引失效的常见场景？
-
-**简要回答：** 索引失效的常见原因：对索引列使用函数、隐式类型转换、违反最左前缀原则、使用 `OR` 连接非索引列、`LIKE '%abc'` 前缀通配符、`NOT IN`/`NOT EXISTS`、`IS NOT NULL`（部分版本）、优化器判断全表扫描更快。
-
-**深度分析：**
-
-```sql
--- ❌ 1. 对索引列使用函数
-SELECT * FROM user WHERE YEAR(created_at) = 2024;
--- ✅ 改为范围查询
-SELECT * FROM user WHERE created_at >= '2024-01-01' AND created_at < '2025-01-01';
-
--- ❌ 2. 隐式类型转换
-SELECT * FROM user WHERE phone = 13800138000;  -- phone 是 VARCHAR，传入数字
--- ✅ 加引号
-SELECT * FROM user WHERE phone = '13800138000';
-
--- ❌ 3. 违反最左前缀
--- 索引 idx(a, b, c)
-SELECT * FROM t WHERE b = 1 AND c = 2;  -- 跳过了 a
--- ✅ 
-SELECT * FROM t WHERE a = 1 AND b = 2 AND c = 3;
-
--- ❌ 4. LIKE 左前缀通配
-SELECT * FROM user WHERE name LIKE '%张';
--- ✅ 右前缀通配可以走索引
-SELECT * FROM user WHERE name LIKE '张%';
-
--- ❌ 5. OR 连接非索引列
-SELECT * FROM user WHERE age = 25 OR name = '张三';
--- ✅ 各自独立查询 UNION
-SELECT * FROM user WHERE age = 25 UNION SELECT * FROM user WHERE name = '张三';
-
--- ❌ 6. NOT IN（小表除外）
-SELECT * FROM user WHERE age NOT IN (20, 25, 30);
--- ✅ 用 NOT EXISTS 或 LEFT JOIN
-SELECT * FROM user u WHERE NOT EXISTS (SELECT 1 FROM exclude e WHERE e.age = u.age);
-```
-
-:::danger 面试追问
-- 怎么确认索引是否生效？→ 用 `EXPLAIN` 查看 `type`（不应是 ALL）、`key`（使用的索引）、`rows`（扫描行数）
-- 优化器什么时候会选择全表扫描？→ 当表数据量小、索引区分度低、查询返回比例超过 30% 时，全表扫描可能比索引回表更快
-- `!=` 会让索引失效吗？→ 不一定。MySQL 8.0 优化器对 `!=` 有优化，如果走索引成本更低仍然会使用索引
-:::
-
----
-
 ## ⭐ MVCC 多版本并发控制原理？
 
 **简要回答：** MVCC（Multi-Version Concurrency Control）是 InnoDB 引擎实现事务隔离的机制，通过隐藏列（trx_id, roll_pointer）、Undo Log 链和 Read View 实现读不加锁。RC 级别每次 SELECT 创建新 Read View，RR 级别事务第一次 SELECT 创建 Read View 后复用。
@@ -500,3 +453,62 @@ graph TD
 - Undo Log 什么时候清理？→ Purge 线程在没有任何活跃的 Read View 引用旧版本时清理
 - MVCC 和锁是什么关系？→ MVCC 解决读写冲突（读不加锁），锁解决写写冲突（悲观锁）和写读冲突（当前读）
 :::
+
+---
+
+## ⭐ MySQL 中 binlog 和 redo log 的区别？
+
+**简要回答：** redo log 是 InnoDB 引擎层的物理日志，记录页的修改，用于崩溃恢复（crash-safe）；binlog 是 MySQL Server 层的逻辑日志，记录所有 DDL/DML 操作，用于主从复制和数据恢复。
+
+**深度分析：**
+
+```mermaid
+graph LR
+    subgraph "执行一条 UPDATE"
+        A["客户端"] --> B["MySQL Server"]
+        B --> C["写 redo log<br/>（InnoDB Buffer Pool → redo log buffer → 刷盘）"]
+        B --> D["写 binlog<br/>（Statement/Row/Mixed 格式）"]
+        C --> E["两阶段提交<br/>保证一致性"]
+        D --> E
+    end
+    
+    style C fill:#eaf2f8,stroke:#2980b9
+    style D fill:#eafaf1,stroke:#27ae60
+```
+
+| 维度 | redo log | binlog |
+|------|---------|--------|
+| 层级 | InnoDB 引擎层 | MySQL Server 层 |
+| 类型 | 物理日志（页修改） | 逻辑日志（SQL 语句或行变更） |
+| 用途 | 崩溃恢复（crash-safe） | 主从复制、数据恢复 |
+| 大小 | 固定大小，循环写 | 追加写入，可配置过期 |
+| 写入时机 | 事务提交时刷盘 | 事务提交时写入 |
+
+:::tip 两阶段提交
+为什么需要两阶段提交？保证 redo log 和 binlog 的一致性：
+1. **Prepare 阶段**：redo log 写入磁盘，标记为 prepare 状态
+2. **Commit 阶段**：binlog 写入磁盘后，redo log 标记为 commit 状态
+3. 如果崩溃恢复：redo log 处于 prepare 且 binlog 存在 → 提交事务；binlog 不存在 → 回滚事务
+:::
+
+---
+
+## ⭐ MySQL 高可用方案有哪些？
+
+**简要回答：** 主从复制 + 读写分离是最基础的方案，进一步可以用 MHA（自动故障切换）、MySQL InnoDB Cluster（组复制）、Orchestrator 等方案实现高可用。
+
+**深度分析：**
+
+| 方案 | 原理 | 优点 | 缺点 |
+|------|------|------|------|
+| 主从复制 | binlog 异步同步 | 简单，读扩展 | 主从延迟，主宕机需手动切换 |
+| 半同步复制 | 至少一个从库确认收到 binlog | 减少数据丢失 | 性能略降 |
+| MHA | 监控主库，自动故障切换 | 切换快（30s 内） | 单点写入，额外组件维护 |
+| 组复制 (Group Replication) | Paxos 协议，所有节点一致 | 强一致性 | 至少 3 节点，性能损耗大 |
+| MySQL Router + InnoDB Cluster | 官方全套方案 | 自动路由 + 高可用 | 运维复杂度高 |
+
+:::tip 面试追问
+- **主从延迟怎么解决？** 并行复制（基于库/组提交）、读写分离中间件路由关键读请求到主库
+- **GTID 是什么？** 全局事务标识符，代替传统 binlog position 做复制，简化主从切换和故障恢复
+:::
+

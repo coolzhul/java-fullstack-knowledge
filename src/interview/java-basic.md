@@ -2,50 +2,6 @@
 
 > 持续更新中 | 最后更新：2026-04-02
 
----
-
-## ⭐ HashMap 的底层实现原理？
-
-**简要回答：** JDK 8 中 HashMap 由数组 + 链表 + 红黑树组成。通过 hash 值定位数组下标，链表长度超过 8 且数组长度 ≥ 64 时转为红黑树。
-
-**深度分析：**
-
-```java
-// 核心数据结构
-transient Node<K,V>[] table;
-
-// put 流程
-1. 计算 hash: (h = key.hashCode()) ^ (h >>> 16)  // 高16位异或低16位，减少碰撞
-2. 定位桶: index = (n - 1) & hash
-3. 桶为空 → 直接放入
-4. 桶非空 → 遍历链表
-   - key 已存在 → 更新 value
-   - 链表长度 < 8 → 尾插法
-   - 链表长度 ≥ 8 且 table.length ≥ 64 → treeifyBin 转红黑树
-   - table.length < 64 → resize 扩容
-```
-
-**关键细节：**
-
-| 特性 | JDK 7 | JDK 8 |
-|------|-------|-------|
-| 数据结构 | 数组 + 链表 | 数组 + 链表 + 红黑树 |
-| 插入方式 | 头插法（多线程环形链表） | 尾插法 |
-| 扩容时机 | size > threshold | 同左 |
-| 扩容后位置 | 重新 hash | 原位置 或 原位置 + oldCap |
-
-**为什么容量是 2 的幂？**
-- `index = hash & (n - 1)` 等价于 `hash % n`，但位运算更快
-- 扩容时元素要么留在原位，要么移动到 `原位置 + oldCap`，方便迁移
-
-:::danger 面试追问
-- HashMap 为什么线程不安全？→ put/resize 并发时数据丢失、环形链表（JDK7）
-- ConcurrentHashMap 怎么实现的？→ JDK7 Segment + ReentrantLock，JDK8 CAS + synchronized
-- hash 碰撞怎么办？→ 链表 → 红黑树 → 再扩容
-:::
-
----
-
 ## ⭐ ConcurrentHashMap 的实现原理？
 
 **简要回答：** JDK 8 使用 CAS + synchronized 实现细粒度锁，锁住的是链表/红黑树的头节点，并发性能远优于 JDK 7 的 Segment 分段锁。
@@ -70,101 +26,6 @@ put 流程：
 | 锁机制 | ReentrantLock | CAS + synchronized |
 | 并发级别 | 固定 16 | 与桶数量一致 |
 | 数据结构 | 数组 + 链表 | 数组 + 链表 + 红黑树 |
-
----
-
-## ⭐ 线程池的核心参数与拒绝策略？
-
-**简要回答：** 7 个核心参数：corePoolSize、maximumPoolSize、keepAliveTime、unit、workQueue、threadFactory、handler。4 种拒绝策略。
-
-**深度分析：**
-
-```java
-public ThreadPoolExecutor(
-    int corePoolSize,      // 核心线程数
-    int maximumPoolSize,   // 最大线程数
-    long keepAliveTime,    // 空闲线程存活时间
-    TimeUnit unit,         // 时间单位
-    BlockingQueue<Runnable> workQueue,  // 任务队列
-    ThreadFactory threadFactory,        // 线程工厂
-    RejectedExecutionHandler handler    // 拒绝策略
-)
-```
-
-**任务提交执行顺序：**
-
-```mermaid
-flowchart TD
-    A[提交任务] --> B{核心线程数未满?}
-    B -->|是| C[创建核心线程执行]
-    B -->|否| D{队列未满?}
-    D -->|是| E[加入队列等待]
-    D -->|否| F{最大线程数未满?}
-    F -->|是| G[创建非核心线程执行]
-    F -->|否| H[执行拒绝策略]
-```
-
-**4 种拒绝策略：**
-
-| 策略 | 行为 | 适用场景 |
-|------|------|----------|
-| AbortPolicy | 抛 RejectedExecutionException | 默认，需要感知失败 |
-| CallerRunsPolicy | 提交线程自己执行 | 不丢失任务，适合非异步场景 |
-| DiscardPolicy | 静默丢弃 | 可容忍丢失 |
-| DiscardOldestPolicy | 丢弃队列最老任务 | 优先处理新任务 |
-
-:::tip 实践建议
-- CPU 密集型：corePoolSize = CPU 核数 + 1
-- IO 密集型：corePoolSize = CPU 核数 × 2（或更多）
-- **禁止使用 Executors 创建线程池**（无界队列可能导致 OOM）
-:::
-
----
-
-## ⭐ volatile 关键字的作用？
-
-**简要回答：** 保证可见性 + 禁止指令重排序，但不保证原子性。
-
-**深度分析：**
-
-```java
-// 可见性示例
-private volatile boolean flag = false;
-
-// 线程A
-flag = true;  // 立刻对其他线程可见
-
-// 线程B
-while (!flag) { ... }  // 能感知到变化
-
-// 典型用途：DCL 双重检查锁
-private static volatile Singleton instance;
-
-public static Singleton getInstance() {
-    if (instance == null) {                    // 第一次检查
-        synchronized (Singleton.class) {
-            if (instance == null) {            // 第二次检查
-                instance = new Singleton();    // volatile 防止指令重排
-            }
-        }
-    }
-    return instance;
-}
-```
-
-**为什么不保证原子性？**
-
-```java
-volatile int count = 0;
-
-// 两个线程同时执行 count++，实际是 3 步操作：
-// 1. 读取 count 值
-// 2. 加 1
-// 3. 写回 count
-// volatile 只保证读/写本身可见，不保证复合操作的原子性
-```
-
-**底层原理：** 使用内存屏障（Memory Barrier），JVM 层面对应 `lock` 前缀指令 + 缓存一致性协议（MESI）。
 
 ---
 
@@ -550,4 +411,109 @@ public final class String implements Serializable, Comparable<String> {
 | 线程安全 | 天然安全 | 不安全 | 安全（synchronized） |
 | 性能 | 拼接慢 | 最快 | 比 StringBuilder 慢 |
 | 使用场景 | 少量拼接 | 单线程拼接 | 多线程拼接 |
+
+
+---
+
+## ⭐ ArrayList 和 LinkedList 的区别？各适合什么场景？
+
+**简要回答：** ArrayList 底层是动态数组，支持随机访问 O(1)，插入删除需移动元素 O(n)；LinkedList 底层是双向链表，插入删除只需修改指针 O(1)，随机访问需遍历 O(n)。
+
+**深度分析：**
+
+```java
+// ArrayList 源码核心
+public class ArrayList<E> {
+    transient Object[] elementData;  // 底层数组
+    private int size;
+    
+    // 扩容：1.5 倍 growth
+    private void grow() {
+        int newCapacity = oldCapacity + (oldCapacity >> 1);
+        elementData = Arrays.copyOf(elementData, newCapacity);
+    }
+}
+
+// LinkedList 源码核心
+public class LinkedList<E> {
+    transient Node<E> first;  // 头节点
+    transient Node<E> last;   // 尾节点
+    
+    private static class Node<E> {
+        E item;
+        Node<E> next;
+        Node<E> prev;
+    }
+}
+```
+
+| 维度 | ArrayList | LinkedList |
+|------|-----------|------------|
+| 底层结构 | 动态数组 | 双向链表 |
+| 随机访问 get(i) | O(1) | O(n) |
+| 头部插入 | O(n)（需移动元素） | O(1) |
+| 尾部插入 | 均摊 O(1) | O(1) |
+| 中间插入 | O(n) | O(n)（查找 O(n) + 插入 O(1)） |
+| 内存占用 | 紧凑 | 每个节点额外 2 个指针（16 字节） |
+| CPU 缓存友好 | ✅ 数组连续内存 | ❌ 节点分散在堆中 |
+
+:::tip 面试追问
+- **为什么说 LinkedList 不一定比 ArrayList 快？** 因为链表节点在堆上分散分布，无法利用 CPU 缓存行（Cache Line），实际测试中 ArrayList 在大多数场景下更快
+- **ArrayList 扩容细节**：每次扩容 1.5 倍，如果预知数据量应通过 `new ArrayList<>(10000)` 指定初始容量避免多次扩容
+- **ArrayList 删除元素陷阱**：在 for 循环中删除元素要用迭代器或倒序遍历，正序删除会漏删
+:::
+
+---
+
+## ⭐ Java 异常体系是怎样的？Checked 和 Unchecked 区别？
+
+**简要回答：** 所有异常继承自 `Throwable`，分为 `Error`（不可恢复）和 `Exception`（可恢复）。Exception 又分 Checked（编译时检查）和 Unchecked（运行时异常，RuntimeException 子类）。
+
+**深度分析：**
+
+```mermaid
+graph TB
+    A["Throwable"] --> B["Error<br/>不可恢复，不应捕获"]
+    A --> C["Exception<br/>可恢复"]
+    
+    B --> B1["OutOfMemoryError"]
+    B --> B2["StackOverflowError"]
+    B --> B3["NoClassDefFoundError"]
+    
+    C --> C1["Checked Exception<br/>编译时必须处理"]
+    C --> C2["Unchecked Exception<br/>RuntimeException 子类"]
+    
+    C1 --> D1["IOException"]
+    C1 --> D2["SQLException"]
+    C1 --> D3["ClassNotFoundException"]
+    
+    C2 --> E1["NullPointerException"]
+    C2 --> E2["IllegalArgumentException"]
+    C2 --> E3["IndexOutOfBoundsException"]
+    C2 --> E4["ClassCastException"]
+```
+
+| 类型 | 基类 | 编译检查 | 典型场景 |
+|------|------|---------|---------|
+| Checked | Exception（非 RuntimeException） | ✅ 必须处理或声明 throws | IO、数据库、网络 |
+| Unchecked | RuntimeException | ❌ 不强制处理 | 空指针、参数非法、越界 |
+
+```java
+// Checked: 必须处理
+public void readFile() throws IOException {  // 必须 throws 或 try-catch
+    Files.readString(Path.of("test.txt"));
+}
+
+// Unchecked: 不强制处理
+public void divide(int a, int b) {
+    return a / b;  // ArithmeticException 是 RuntimeException，无需声明
+}
+```
+
+:::warning 异常处理最佳实践
+1. **不要用异常控制业务流程**：异常的性能开销大（创建异常对象会填充堆栈）
+2. **不要 catch 后吞掉异常**：至少 `log.error("msg", e)`，否则问题难以排查
+3. **finally 中不要 return**：会覆盖 try/catch 中的返回值
+4. **try-with-resources** 替代手动 close：`try (InputStream is = new FileInputStream(f)) { ... }`
+:::
 

@@ -480,99 +480,79 @@ public class OrderService {
 
 ---
 
-## ⭐ Spring Boot 自动配置原理？
 
-**简要回答：** Spring Boot 自动配置通过 `@EnableAutoConfiguration` → `@Import(AutoConfigurationImportSelector.class)` → 加载 `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports` 文件中的所有自动配置类，每个配置类用 `@Conditional` 系列注解判断是否生效。
+---
+
+## ⭐ Spring 如何解决循环依赖？
+
+**简要回答：** Spring 通过**三级缓存**解决单例 setter 注入的循环依赖。构造器注入无法解决（会报错）。三级缓存的本质是：提前暴露"早期引用"（半成品 Bean），让对方先注入，后续再完成初始化。
+
+**深度分析：**
+
+```mermaid
+sequenceDiagram
+    participant A as BeanA
+    participant C1 as 一级缓存<br/>singletonObjects<br/>(完整Bean)
+    participant C2 as 二级缓存<br/>earlySingletonObjects<br/>(早期引用)
+    participant C3 as 三级缓存<br/>singletonFactories<br/>(ObjectFactory)
+    participant B as BeanB
+    
+    A->>C1: getBean("A") → 未找到
+    A->>C3: 放入 A 的 ObjectFactory
+    A->>B: 属性注入，getBean("B")
+    B->>C1: getBean("A") → 未找到
+    B->>C3: 调用 A 的 ObjectFactory → 得到早期引用
+    B->>C2: A 放入二级缓存
+    B->>B: 完成初始化
+    B->>C1: B 放入一级缓存
+    B-->>A: B 实例返回
+    A->>A: 完成初始化
+    A->>C1: A 放入一级缓存
+```
+
+| 缓存级别 | 名称 | 存什么 | 作用 |
+|---------|------|--------|------|
+| 一级 | singletonObjects | 完整 Bean | 成品，可直接使用 |
+| 二级 | earlySingletonObjects | 早期引用 | 半成品，解决循环依赖 |
+| 三级 | singletonFactories | ObjectFactory | 生成早期引用的工厂（支持 AOP 代理） |
+
+:::warning 三级缓存的核心价值
+为什么不能只用两级缓存？因为需要支持**提前 AOP 代理**：
+1. 普通 Bean：二级缓存的早期引用 = 三级缓存的原始对象，没区别
+2. 需要 AOP 的 Bean：三级缓存的 ObjectFactory 在被调用时才会创建代理对象，确保代理在正确的时机生成
+3. 如果不用三级缓存，就必须在实例化后立即创建代理，但那时候 Bean 还没初始化完，代理可能不正确
+:::
+
+---
+
+## ⭐ Spring Bean 的生命周期？
+
+**简要回答：** Spring Bean 生命周期分为四个阶段：实例化 → 属性注入 → 初始化 → 销毁。核心扩展点：`@PostConstruct`、`InitializingBean.afterPropertiesSet()`、`@PreDestroy`、`DisposableBean.destroy()`。
 
 **深度分析：**
 
 ```mermaid
 flowchart TD
-    A["@SpringBootApplication"] --> B["@EnableAutoConfiguration"]
-    B --> C["@Import<br/>AutoConfigurationImportSelector"]
-    C --> D["SpringFactoriesLoader<br/>加载自动配置类列表"]
-    D --> E["META-INF/spring/<br/>org.springframework.boot.autoconfigure.<br/>AutoConfiguration.imports"]
-    E --> F["遍历每个 AutoConfiguration"]
-    F --> G{"@Conditional 判断"}
-    G -->|条件满足| H["注册 BeanDefinition"]
-    G -->|条件不满足| I["跳过"]
+    A["实例化<br/>createBeanInstance()<br/>调用构造方法"] --> B["属性注入<br/>populateBean()<br/>@Autowired / @Value"]
+    B --> C["Aware 接口回调<br/>BeanNameAware<br/>ApplicationContextAware"]
+    C --> D["BeanPostProcessor#postProcessBeforeInitialization<br/>@PostConstruct"]
+    D --> E["InitializingBean#afterPropertiesSet()"]
+    E --> F["自定义 init-method"]
+    F --> G["BeanPostProcessor#postProcessAfterInitialization<br/>AOP 代理在此创建"]
+    G --> H["Bean 就绪，可使用"]
+    H --> I["容器关闭"]
+    I --> J["@PreDestroy"]
+    J --> K["DisposableBean#destroy()"]
+    K --> L["自定义 destroy-method"]
     
-    style A fill:#eaf2f8,stroke:#2980b9
-    style H fill:#eafaf1,stroke:#27ae60
-    style I fill:#fdedec,stroke:#e74c3c
+    style D fill:#eafaf1,stroke:#27ae60
+    style G fill:#eaf2f8,stroke:#2980b9
+    style J fill:#fdedec,stroke:#e74c3c
 ```
 
-**常用条件注解：**
-
-```java
-@ConditionalOnClass(DataSource.class)          // classpath 中有此类
-@ConditionalOnMissingBean(DataSource.class)     // 容器中无此 Bean
-@ConditionalOnProperty("spring.datasource.url") // 配置了此属性
-@ConditionalOnWebApplication                    // 是 Web 应用
-@ConditionalOnExpression("${feature.enabled}")  // SpEL 表达式为 true
-```
-
-**自定义 Starter 的步骤：**
-1. 创建 `xxx-spring-boot-starter` 模块
-2. 编写自动配置类 `XxxAutoConfiguration`
-3. 编写属性配置类 `XxxProperties`（`@ConfigurationProperties`）
-4. 在 `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports` 中注册
-5. 业务项目引入 starter 依赖 + 配置属性即可
-
-:::danger 面试追问
-- 如何排除某个自动配置？→ `@SpringBootApplication(exclude = {DataSourceAutoConfiguration.class})`
-- 自动配置类加载的顺序怎么控制？→ `@AutoConfigureBefore`、`@AutoConfigureAfter`、`@AutoConfigureOrder`
-- `spring.factories` 和 `AutoConfiguration.imports` 的区别？→ Spring Boot 2.7 以前用 `spring.factories`，3.0 以后改用 `AutoConfiguration.imports`（性能更好）
+:::tip 面试追问
+- **BeanPostProcessor 和 BeanFactoryPostProcessor 的区别**：前者干预 Bean 实例化过程（AOP、@Autowired 注入），后者干预 BeanDefinition 注册过程（修改配置元数据）
+- **prototype Bean 的生命周期**：不参与容器销毁，由 GC 回收
+- **执行顺序**：@PostConstruct → InitializingBean → init-method；@PreDestroy → DisposableBean → destroy-method
 :::
 
----
-
-## ⭐ Spring 事务传播机制有哪些？分别什么场景用？
-
-**简要回答：** 7 种传播行为：REQUIRED（默认，加入当前事务）、REQUIRES_NEW（新建独立事务）、NESTED（嵌套事务，savepoint）、SUPPORTS（有事务就加入，没有就非事务执行）、NOT_SUPPORTED（非事务执行）、MANDATORY（必须在事务中调用）、NEVER（不能在事务中调用）。
-
-**深度分析：**
-
-```java
-@Service
-public class OrderService {
-    @Autowired
-    private InventoryService inventoryService;
-
-    // 外层事务
-    @Transactional(propagation = Propagation.REQUIRED)
-    public void createOrder() {
-        orderMapper.insert(order);
-        
-        // REQUIRES_NEW：独立事务，外层回滚不影响这里
-        inventoryService.deductInventory();  // 库存扣减在独立事务中
-        
-        // 如果这里抛异常，orderMapper 和后续操作回滚
-        // 但 inventoryService.deductInventory() 不会回滚（独立事务已提交）
-    }
-}
-
-@Service
-public class InventoryService {
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void deductInventory() {
-        inventoryMapper.deduct(productId, quantity);
-    }
-}
-```
-
-| 传播行为 | 外层有事务 | 外层无事务 | 典型场景 |
-|----------|:---------:|:---------:|----------|
-| **REQUIRED** | 加入外层事务 | 新建事务 | 大部分场景（默认） |
-| **REQUIRES_NEW** | 挂起外层，新建独立事务 | 新建事务 | 日志记录、独立操作 |
-| **NESTED** | 嵌套事务（savepoint） | 新建事务 | 部分回滚需求 |
-| **SUPPORTS** | 加入外层事务 | 非事务执行 | 查询方法 |
-| **NOT_SUPPORTED** | 挂起外层事务 | 非事务执行 | 不需要事务的操作 |
-| **MANDATORY** | 加入外层事务 | 抛异常 | 强制必须有事务 |
-| **NEVER** | 抛异常 | 非事务执行 | 强制不能有事务 |
-
-:::danger 面试追问
-- REQUIRES_NEW 事务回滚后外层事务会怎样？→ 外层事务感知不到 REQUIRES_NEW 的回滚（它们是独立的），但外层可以通过 try-catch 捕获异常来决定自己的行为
-- NESTED 和 REQUIRES_NEW 的本质区别？→ NESTED 在同一个物理事务中用 savepoint 实现部分回滚（效率高），REQUIRES_NEW 是完全独立的新事务（独立 Connection）
-- 事务传播失效的场景？→ 同类内部方法调用不走代理（AOP 限制），必须注入自身或用 `AopContext.currentProxy()`
-:::
