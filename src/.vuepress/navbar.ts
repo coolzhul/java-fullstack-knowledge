@@ -21,4 +21,14 @@ export default navbar([
   { text: "开发工具", icon: "mdi:tools", link: "/tools/" },
   { text: "架构设计", icon: "mdi:office-building-cog", link: "/architecture/" },
   { text: "面试题库", icon: "mdi:clipboard-text", link: "/interview/" },
+  {
+    text: "AI",
+    icon: "mdi:robot",
+    prefix: "/ai/",
+    children: [
+      { text: "概览", icon: "mdi:home", link: "" },
+      { text: "Python", icon: "mdi:language-python", link: "python/" },
+      { text: "AI 大模型应用开发", icon: "mdi:robot", link: "ai-app-dev/" },
+    ],
+  },
 ]);
