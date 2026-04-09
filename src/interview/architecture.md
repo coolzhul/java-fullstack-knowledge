@@ -485,3 +485,69 @@ public class OrderTransactionListener implements RocketMQLocalTransactionListene
 - 微服务怎么拆分数据库？→ 每个服务独立数据库（Database per Service），禁止跨库 JOIN
 - 什么时候不适合微服务？→ 团队小（<5人）、业务简单、早期创业项目、对运维能力要求不高的项目
 :::
+
+---
+
+## ⭐ 如何设计一个秒杀系统？
+
+**简要回答：** 核心思路是「削峰填谷 + 分层过滤」。请求进来后层层拦截，只让少数合法请求打到数据库：CDN → Nginx 限流 → 网关鉴权 → Redis 预扣减 → MQ 异步下单 → 数据库落库。
+
+**深度分析：**
+
+```mermaid
+graph LR
+    A["用户请求<br/>10万QPS"] --> B["CDN<br/>静态资源缓存"]
+    B --> C["Nginx<br/>限流 + 黑名单"]
+    C --> D["网关<br/>鉴权 + 风控"]
+    D --> E["秒杀服务<br/>1000 QPS 通过"]
+    E --> F["Redis<br/>预扣减库存"]
+    F -->|"成功"| G["MQ<br/>异步下单"]
+    F -->|"失败"| H["直接返回售罄"]
+    G --> I["订单服务<br/>数据库落库"]
+    I --> J["支付回调<br/>扣减真实库存"]
+    
+    style A fill:#fdedec,stroke:#e74c3c
+    style F fill:#fef9e7,stroke:#f39c12
+    style I fill:#eafaf1,stroke:#27ae60
+```
+
+| 层级 | 作用 | 技术 |
+|------|------|------|
+| CDN | 静态资源（商品页、JS/CSS） | Nginx、Cloudflare |
+| Nginx | 限流（令牌桶）、IP 黑名单 | limit_req、Lua |
+| 网关 | 鉴权、风控（刷单检测） | Spring Cloud Gateway |
+| 秒杀服务 | 校验、Redis 预扣减 | Lua 脚本保证原子性 |
+| MQ | 削峰，异步下单 | RocketMQ、Kafka |
+| 订单服务 | 数据库落库 | MySQL |
+
+```java
+// Redis 预扣减库存（Lua 脚本，原子操作）
+String script = """
+    local stock = tonumber(redis.call('GET', KEYS[1]))
+    if stock and stock > 0 then
+        redis.call('DECR', KEYS[1])
+        redis.call('LPUSH', KEYS[2], ARGV[1])
+        return 1
+    end
+    return 0
+    """;
+
+Long result = redisTemplate.execute(
+    new DefaultRedisScript<>(script, Long.class),
+    Arrays.asList("seckill:stock:" + productId, "seckill:queue:" + productId),
+    userId.toString()
+);
+if (result == 1L) {
+    // 预扣减成功，发 MQ 消息异步创建订单
+    rocketMQTemplate.convertAndSend("seckill-order", orderDTO);
+} else {
+    throw new BizException("商品已售罄");
+}
+```
+
+:::tip 面试追问
+- **超卖怎么防止？** Redis Lua 脚本原子扣减 + 数据库唯一索引兜底
+- **恶意刷单怎么防？** 验证码（人机验证）、IP 限流、用户维度限购（Redis SETNX）
+- **下单后多久没支付怎么办？** 延迟消息（RocketMQ 延迟级）30 分钟后检查订单状态，未支付则取消并回滚库存
+- **库存回滚？** 支付超时取消 → 发消息 → 订单服务取消订单 → 库存服务回滚库存
+:::

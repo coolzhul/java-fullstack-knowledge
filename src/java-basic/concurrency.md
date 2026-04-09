@@ -290,25 +290,20 @@ StoreLoad屏障    // 确保之后的读能看到这次写的结果
 现代 CPU 使用多级缓存（L1/L2/L3），每个核心有自己的 L1/L2 缓存。MESI 协议维护缓存行的一致性：
 
 ```mermaid
-graph LR
-    subgraph "CPU Core 0"
-        L1_0["L1 Cache<br/>缓存行: x=1<br/>State: M(Modified)"]
-        L2_0["L2 Cache"]
-    end
+stateDiagram-v2
+    [*] --> Invalid : 初始状态
+    [*] --> Modified : CPU 写入独占缓存行
+    [*] --> Exclusive : CPU 读取缓存行
+    [*] --> Shared : 多个 CPU 读取同一缓存行
     
-    subgraph "CPU Core 1"
-        L1_1["L1 Cache<br/>缓存行: x=1<br/>State: S(Shared)"]
-        L2_1["L2 Cache"]
-    end
-    
-    L1_0 <-->|"缓存一致性<br/>总线"| L1_1
-    L1_0 --> L2_0
-    L1_1 --> L2_1
-    L2_0 <-->|"总线"| L2_1
-    L2_0 <-->|"回写"| MainMem["主内存<br/>x=1"]
+    Modified --> Shared : 其他 CPU 读取（写回内存）
+    Modified --> Invalid : 其他 CPU 写入同一地址
+    Exclusive --> Modified : CPU 写入
+    Exclusive --> Shared : 其他 CPU 读取
+    Exclusive --> Invalid : 其他 CPU 写入同一地址
+    Shared --> Modified : CPU 写入（发 Invalidate 信号）
+    Shared --> Invalid : 其他 CPU 写入同一地址
 ```
-
-**MESI 四种状态**：
 
 | 状态 | 含义 | 读操作 | 写操作 |
 |------|------|--------|--------|
@@ -356,6 +351,15 @@ class VolatileExample {
 
 ::: tip happens-before 不是时间上的"先发生"
 happens-before 是可见性保证，不等于时间上的先后顺序。编译器和 CPU 可以重排序，但必须保证 happens-before 关系中的可见性。比如 `a=1` 可能被重排序到 `flag=true` 之后执行，但只要 `flag=true` 对其他线程可见时 `a=1` 也可见就满足 happens-before。
+:::
+
+::: details volatile 的底层实现：Lock 前缀指令
+`volatile` 写操作在 x86 架构上会生成一条 **Lock 前缀指令**（如 `lock addl $0x0, (%rsp)`），它会：
+1. 将当前 CPU 缓存行数据**写回主内存**（Write-back）
+2. 使其他 CPU 中持有该缓存行的副本**失效**（Invalidate）
+3. **锁定缓存行**（隐式的，不需要总线锁）
+
+这就是为什么 volatile 能保证可见性——本质上是触发 MESI 协议的缓存一致性消息。在 ARM 架构上则通过 DMB（Data Memory Barrier）指令实现。
 :::
 
 ### 为什么 DCL 单例的 volatile 是必须的？
@@ -719,77 +723,102 @@ graph TD
 
 executor.prestartAllCoreThreads();  // 预创建所有核心线程
 executor.prestartCoreThread();      // 预创建一个核心线程
+```
 
-// prestartAll
-### volatile——轻量级同步与内存语义
-
-#### volatile 的两大作用
+#### Worker 工作线程模型
 
 ```java
-// 1. 可见性保证：一个线程修改，其他线程立即可见
-private volatile boolean running = true;
+// ThreadPoolExecutor 内部通过 Worker 类管理线程
+// Worker 继承了 AQS（用 state 控制中断）和实现了 Runnable
 
-// 线程 A
-while (running) {
-    // 能及时感知线程 B 的修改
+// Worker.run() 的核心逻辑：
+while (task != null || (task = getTask()) != null) {
+    // 1. 执行任务前：调用 beforeExecute(thread, task)（可扩展的钩子方法）
+    // 2. 执行任务：task.run()
+    // 3. 执行任务后：调用 afterExecute(task, null)
+    // 4. 执行完后 task = null，继续从队列取任务
 }
 
-// 线程 B
-running = false;  // 线程 A 立即退出循环
+// getTask() 逻辑：
+// 1. 如果线程数 > corePoolSize，超时后返回 null → 线程退出
+// 2. 如果线程数 <= corePoolSize，keepAliveTime 内阻塞等待 → 不会退出
+// 3. allowCoreThreadTimeOut=true 时，核心线程也会超时退出
+```
 
-// 2. 禁止指令重排序
-private volatile Singleton instance;
+#### execute() vs submit()
 
-public Singleton getInstance() {
-    if (instance == null) {              // 第一次检查
-        synchronized (Singleton.class) {
-            if (instance == null) {      // 第二次检查（DCL）
-                instance = new Singleton(); // volatile 禁止此处重排序
-            }
-        }
-    }
-    return instance;
+```java
+// execute()：提交 Runnable，无返回值，异常直接抛到 UncaughtExceptionHandler
+executor.execute(() -> doWork());
+
+// submit()：提交 Callable/Runnable，返回 Future，异常被封装在 Future 中
+Future<String> future = executor.submit(() -> {
+    if (Math.random() > 0.5) throw new RuntimeException("failed");
+    return "success";
+});
+try {
+    String result = future.get();  // 这里才会抛出异常
+} catch (ExecutionException e) {
+    System.out.println("任务失败: " + e.getCause());
 }
 ```
 
-#### MESI 缓存一致性协议
+#### 线程池参数配置最佳实践
 
-现代 CPU 使用多级缓存，每个核心有自己的 L1/L2 缓存，共享 L3 缓存。MESI 协议通过四种状态管理缓存行的一致性：
+| 场景 | corePoolSize | maximumPoolSize | workQueue | 说明 |
+|------|:---:|:---:|------|------|
+| **CPU 密集型** | CPU 核数 + 1 | 同左 | 小队列（50-100） | 减少线程切换开销 |
+| **IO 密集型** | CPU 核数 × 2 | CPU 核数 × 4 | 较大队列（500-1000） | 利用 IO 等待时间 |
+| **混合型** | 根据压测调整 | corePoolSize × 2 | 有界队列 | 监控线程利用率调整 |
 
-```mermaid
-stateDiagram-v2
-    [*] --> Invalid : 初始状态
-    [*] --> Modified : CPU 写入独占缓存行
-    [*] --> Exclusive : CPU 读取缓存行
-    [*] --> Shared : 多个 CPU 读取同一缓存行
-    
-    Modified --> Shared : 其他 CPU 读取（写回内存）
-    Modified --> Invalid : 其他 CPU 写入同一地址
-    Exclusive --> Modified : CPU 写入
-    Exclusive --> Shared : 其他 CPU 读取
-    Exclusive --> Invalid : 其他 CPU 写入同一地址
-    Shared --> Modified : CPU 写入（发 Invalidate 信号）
-    Shared --> Invalid : 其他 CPU 写入同一地址
-```
-
-| 状态 | 含义 | 数据位置 |
-|------|------|----------|
-| **M (Modified)** | 已修改，与内存不一致 | 仅在本缓存，脏数据 |
-| **E (Exclusive)** | 已修改，与内存一致 | 仅在本缓存 |
-| **S (Shared)** | 未修改，多核共享 | 本缓存 + 内存 |
-| **I (Invalid)** | 失效，不可使用 | — |
-
-:::tip volatile 的底层实现
-`volatile` 写操作会生成一条 Lock 前缀指令（如 `lock addl $0x0, (%rsp)`），它会：
-1. 将当前缓存行数据写回主内存
-2. 使其他 CPU 中持有该缓存行的副本失效（Invalidate）
-
-这就是为什么 volatile 能保证可见性——本质上是触发 MESI 协议的缓存一致性消息。
+::: tip 线程数经验公式
+- **CPU 密集型**：`N + 1`（N = CPU 核数，+1 是防止页面缺失导致的暂停）
+- **IO 密集型**：`N × (1 + W/C)`（W = 平均等待时间，C = 平均计算时间）
+- **获取 CPU 核数**：`Runtime.getRuntime().availableProcessors()`
 :::
 
-### CAS——无锁并发的基石
+#### 常用线程池工厂方法
 
-#### CAS 底层实现（Unsafe）
+```java
+// ✅ 推荐：使用 ThreadPoolExecutor 直接构造，参数可控
+ThreadPoolExecutor executor = new ThreadPoolExecutor(
+    5, 10, 60L, TimeUnit.SECONDS,
+    new LinkedBlockingQueue<>(100),
+    new ThreadFactoryBuilder().setNameFormat("biz-worker-%d").build(),
+    new ThreadPoolExecutor.CallerRunsPolicy()
+);
+
+// ⚠️ 不推荐直接使用 Executors 工厂方法：
+// Executors.newFixedThreadPool(10)    → 无界队列，可能 OOM
+// Executors.newCachedThreadPool()     → 最大线程数 Integer.MAX_VALUE，可能 OOM
+// Executors.newSingleThreadExecutor() → 无界队列，可能 OOM
+
+// 如果需要定时/周期任务，使用 ScheduledThreadPoolExecutor
+ScheduledExecutorService scheduler = new ScheduledThreadPoolExecutor(3);
+scheduler.schedule(() -> doWork(), 5, TimeUnit.SECONDS);           // 延迟执行
+scheduler.scheduleAtFixedRate(() -> doWork(), 0, 1, TimeUnit.HOURS); // 固定频率
+```
+
+#### 线程池监控
+
+```java
+// 线程池提供了丰富的监控方法
+ThreadPoolExecutor executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(5);
+
+executor.getPoolSize();         // 当前线程数
+executor.getActiveCount();      // 正在执行任务的线程数
+executor.getQueue().size();     // 队列中等待的任务数
+executor.getCompletedTaskCount(); // 已完成的任务数
+executor.getTaskCount();        // 总任务数（已完成 + 队列中 + 执行中）
+executor.isShutdown();          // 是否已调用 shutdown
+executor.isTerminated();        // 所有任务是否都已完成
+
+// 建议通过 Micrometer + Prometheus 暴露线程池指标进行监控
+```
+
+## CAS——无锁并发的基石
+
+### CAS 底层实现
 
 ```java
 // CAS (Compare-And-Swap) 三要素：内存地址 V、期望值 A、新值 B
@@ -797,11 +826,15 @@ stateDiagram-v2
 
 // Java 中通过 Unsafe 类调用 CPU 的 CAS 指令（x86 的 cmpxchg）
 public final native boolean compareAndSwapInt(Object o, long offset, int expected, int x);
-public final native boolean compareAndSwapLong(Object o, long offset, long expected, long x);
-public final native boolean compareAndSwapObject(Object o, long offset, Object expected, Object x);
+public final native boolean compareAndSwapLong(Object o, long offset, long expected, int x);
+public final native boolean compareAndSwapObject(Object o, long offset, Object expected, int x);
+
+// JDK 9+ 推荐使用 VarHandle 替代 Unsafe
+VarHandle handle = MethodHandles.lookup().findVarHandle(Target.class, "value", int.class);
+handle.compareAndSet(target, 1, 2);  // CAS
 ```
 
-#### CAS 的三大问题
+### CAS 的三大问题
 
 | 问题 | 描述 | 解决方案 |
 |------|------|----------|
@@ -818,113 +851,31 @@ AtomicInteger ai = new AtomicInteger(100);
 
 // 解决：使用版本号
 AtomicStampedReference<Integer> ref = new AtomicStampedReference<>(100, 0);
-
-int stamp = ref.getStamp();  // 获取当前版本号
+int stamp = ref.getStamp();
 ref.compareAndSet(100, 200, stamp, stamp + 1);  // 同时比较值和版本号
 // 线程2修改后版本号变了，线程1的 CAS 会失败
+
+// 高并发场景推荐 LongAdder 替代 AtomicInteger
+LongAdder adder = new LongAdder();
+adder.increment();  // 分散到多个 Cell，减少 CAS 竞争
+adder.sum();        // 获取总和
 ```
 
-### AQS——JUC 并发工具的灵魂
-
-#### AQS 核心架构
-
-```mermaid
-graph TB
-    subgraph "AQS (AbstractQueuedSynchronizer)"
-        A["state<br/>volatile int<br/>表示同步状态"]
-        B["CLH 双向队列<br/>FIFO 等待队列"]
-        C["exclusiveOwnerThread<br/>独占模式持有线程"]
-    end
-    
-    subgraph "独占模式 (Exclusive)"
-        D["ReentrantLock"]
-        E["ReentrantReadWriteLock.WriteLock"]
-    end
-    
-    subgraph "共享模式 (Shared)"
-        F["Semaphore"]
-        G["CountDownLatch"]
-        H["ReentrantReadWriteLock.ReadLock"]
-    end
-    
-    D --> A
-    E --> A
-    F --> A
-    G --> A
-    H --> A
-    
-    style A fill:#eaf2f8,stroke:#2980b9
-    style B fill:#fef9e7,stroke:#f39c12
-```
-
-#### CLH 队列结构
+### 原子类体系
 
 ```java
-// AQS 内部的 CLH 队列节点
-static final class Node {
-    static final Node SHARED = new Node();    // 共享模式标记
-    static final Node EXCLUSIVE = null;        // 独占模式标记
-    static final int CANCELLED  =  1;         // 线程已取消
-    static final int SIGNAL    = -1;          // 后继线程需要唤醒
-    static final int PROPAGATE = -3;          // 共享模式传播
-    
-    volatile int waitStatus;       // 等待状态
-    volatile Node prev;            // 前驱节点
-    volatile Node next;            // 后继节点
-    volatile Thread thread;        // 持有线程
-    Node nextWaiter;               // 条件队列中的后继
-}
-```
+// 基本类型原子类
+AtomicInteger, AtomicLong, AtomicBoolean
 
-#### ReentrantLock 的 AQS 工作流程
+// 数组类型原子类
+AtomicIntegerArray, AtomicLongArray, AtomicReferenceArray
 
-```mermaid
-sequenceDiagram
-    participant T1 as 线程1
-    participant AQS as AQS
-    participant Q as CLH队列
-    
-    T1->>AQS: lock() → tryAcquire(1)
-    Note over AQS: state=0, CAS(0→1) 成功
-    AQS-->>T1: 获取锁成功
-    
-    T1->>AQS: 执行临界区代码
-    
-    Note over AQS: 线程2尝试获取锁
-    Note over Q: 线程2入队 → waitStatus=SIGNAL
-    
-    T1->>AQS: unlock() → tryRelease(1)
-    Note over AQS: state=1→0
-    AQS->>Q: unparkSuccessor(head)
-    Q-->>T1: 线程2被唤醒
-```
+// 引用类型原子类
+AtomicReference<V>, AtomicStampedReference<V>, AtomicMarkableReference<V>
 
-:::warning 公平锁 vs 非公平锁
-ReentrantLock 默认**非公平锁**：
-- **非公平锁**：新线程直接尝试 CAS 抢锁，失败再入队。性能更好，但可能饥饿
-- **公平锁**：新线程必须检查队列，排在前面的先获取。不会饥饿，但吞吐量低
+// 累加器（高并发计数首选）
+LongAdder, LongAccumulator, DoubleAdder, DoubleAccumulator
 
-`new ReentrantLock(true)` 创建公平锁，`new ReentrantLock()` 创建非公平锁（默认）。
-:::
-
-### CountDownLatch 与 Semaphore 底层
-
-```java
-// CountDownLatch：基于 AQS 共享模式
-// state 初始化为 count，每次 countDown() → state-1
-// state=0 时唤醒所有等待线程
-CountDownLatch latch = new CountDownLatch(3);
-latch.countDown();  // tryReleaseShared: CAS(state, 3, 2)
-latch.countDown();  // CAS(state, 2, 1)
-latch.countDown();  // CAS(state, 1, 0) → doReleaseShared 唤醒等待线程
-latch.await();      // tryAcquireShared(1): state!=0 时入队 park
-
-// Semaphore：基于 AQS 共享模式
-// state 初始化为 permits，表示可用许可证数
-// acquire() → state-1 (CAS)
-// release() → state+1 (CAS)
-Semaphore sem = new Semaphore(5);
-sem.acquire();   // CAS(state, 5, 4) 成功获取
-sem.acquire();   // CAS(state, 4, 3) 
-sem.release();   // CAS(state, 3, 4) 释放许可证
+// 字段更新器（更新对象的某个字段）
+AtomicIntegerFieldUpdater, AtomicLongFieldUpdater, AtomicReferenceFieldUpdater
 ```

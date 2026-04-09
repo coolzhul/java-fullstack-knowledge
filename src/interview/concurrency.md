@@ -465,3 +465,99 @@ protected final boolean tryAcquire(int acquires) {
 - **可重入**：ReentrantLock 通过 `state` 累加实现，每次 lock() state+1，unlock() state-1，state=0 完全释放
 :::
 
+---
+
+## ⭐ Java 中有哪些方式创建线程？线程池如何正确关闭？
+
+**简要回答：** 创建线程有 4 种方式：继承 Thread、实现 Runnable、实现 Callable、线程池。线程池关闭用 `shutdown()`（等待任务完成）或 `shutdownNow()`（立即中断）。
+
+**深度分析：**
+
+```java
+// 方式4：线程池（实际开发唯一推荐方式）
+ThreadPoolExecutor executor = new ThreadPoolExecutor(
+    5, 10, 60L, TimeUnit.SECONDS,
+    new LinkedBlockingQueue<>(100),
+    new ThreadPoolExecutor.CallerRunsPolicy()
+);
+
+// 正确关闭线程池
+executor.shutdown();         // 温和关闭：不再接受新任务，等待已提交的任务执行完
+executor.shutdownNow();      // 强制关闭：尝试中断正在执行的任务，返回未执行的任务列表
+
+// 最佳实践：配合 awaitTermination 等待
+executor.shutdown();
+try {
+    if (!executor.awaitTermination(60, TimeUnit.SECONDS)) {
+        executor.shutdownNow();  // 超时后强制关闭
+        if (!executor.awaitTermination(60, TimeUnit.SECONDS)) {
+            System.err.println("线程池未完全关闭");
+        }
+    }
+} catch (InterruptedException e) {
+    executor.shutdownNow();
+    Thread.currentThread().interrupt();
+}
+```
+
+| 关闭方式 | 新任务 | 执行中任务 | 队列中任务 | 适用场景 |
+|----------|:---:|:---:|:---:|----------|
+| `shutdown()` | 拒绝 | 等待完成 | 继续执行 | 优雅停机 |
+| `shutdownNow()` | 拒绝 | 尝试中断 | 丢弃并返回 | 紧急停机 |
+
+:::tip 面试追问
+- **为什么不用 Executors 工厂方法？** `newFixedThreadPool` 和 `newSingleThreadExecutor` 用无界队列，可能 OOM；`newCachedThreadPool` 最大线程数 Integer.MAX_VALUE
+- **shutdown vs shutdownNow 的返回值？** `shutdown()` 返回 void，`shutdownNow()` 返回 `List<Runnable>`（未执行的任务）
+- **如何确保所有任务执行完？** 用 `CountDownLatch` 或 `executor.invokeAll()` 等待所有任务完成后再 shutdown
+:::
+
+---
+
+## ⭐ ReentrantReadWriteLock 的读写锁原理？存在什么问题？
+
+**简要回答：** 读写锁允许读读共享、读写互斥、写写互斥。核心问题是**写饥饿**——大量读线程可能导致写线程一直获取不到锁。JDK 8 的 `StampedLock` 解决了这个问题。
+
+**深度分析：**
+
+```java
+ReentrantReadWriteLock rwLock = new ReentrantReadWriteLock();
+
+// 读锁（共享锁）——多个线程可以同时读
+rwLock.readLock().lock();
+try {
+    // 读操作
+} finally {
+    rwLock.readLock().unlock();
+}
+
+// 写锁（排他锁）——独占
+rwLock.writeLock().lock();
+try {
+    // 写操作
+} finally {
+    rwLock.writeLock().unlock();
+}
+
+// 锁降级（写锁 → 读锁）✅ 支持
+rwLock.writeLock().lock();
+try {
+    // 写数据
+    rwLock.readLock().lock();  // 获取读锁（持有写锁时）
+} finally {
+    rwLock.writeLock().unlock();  // 释放写锁，降级为读锁
+    try {
+        // 读数据（利用刚写的数据）
+    } finally {
+        rwLock.readLock().unlock();
+    }
+}
+
+// 锁升级（读锁 → 写锁）❌ 不支持，会死锁！
+```
+
+:::warning 写饥饿问题
+当大量线程持有读锁时，写线程无法获取锁（因为读写互斥），导致写操作长时间等待。解决方案：
+- ReentrantReadWriteLock 可以设置为非公平模式（默认非公平，写线程可以插队）
+- 使用 JDK 8 的 `StampedLock`，支持乐观读，完全避免写饥饿
+:::
+

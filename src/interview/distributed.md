@@ -517,3 +517,51 @@ graph TB
 - **幂等性**：分布式事务中 retry 是常态，下游接口必须保证幂等（唯一请求ID去重）
 :::
 
+---
+
+## ⭐ 如何保证接口的幂等性？
+
+**简要回答：** 幂等性指多次调用结果和一次调用相同。常见方案：唯一索引、Token 机制、乐观锁（版本号）、分布式锁、状态机。
+
+**深度分析：**
+
+```java
+// 方案1：唯一索引（数据库层去重）
+CREATE UNIQUE INDEX uk_order_no ON orders(order_no);
+// 重复插入会抛 DuplicateKeyException，捕获后查询返回
+
+// 方案2：Token 机制（提交前先获取 Token）
+// 1. 前端请求 /api/token 获取 token
+// 2. 提交表单时带上 token
+// 3. 后端删除 token（原子操作），删除成功 = 首次提交
+@PostMapping("/order")
+public Result createOrder(@RequestParam String token) {
+    boolean deleted = redisTemplate.delete("idempotent:" + token);
+    if (!deleted) return Result.fail("请勿重复提交");
+    // 处理业务...
+}
+
+// 方案3：乐观锁（版本号）
+UPDATE account SET balance = balance - 100, version = version + 1
+WHERE id = 1 AND version = 5;  // 版本不匹配则更新失败
+
+// 方案4：状态机（订单状态只能单向流转）
+UPDATE orders SET status = 'PAID' WHERE id = 1 AND status = 'UNPAID';
+// 已支付的订单再次更新会匹配 0 行
+
+// 方案5：分布式锁
+String lockKey = "order:" + orderId;
+RLock lock = redisson.getLock(lockKey);
+if (lock.tryLock(5, 30, TimeUnit.SECONDS)) {
+    try { /* 处理业务 */ } finally { lock.unlock(); }
+}
+```
+
+| 方案 | 适用场景 | 优点 | 缺点 |
+|------|----------|------|------|
+| 唯一索引 | 插入去重 | 数据库保证，最可靠 | 依赖数据库，已存在数据不适用 |
+| Token 机制 | 表单提交 | 简单有效 | 需要额外接口获取 Token |
+| 乐观锁 | 更新操作 | 无锁，并发性能好 | 只适用于更新场景 |
+| 状态机 | 业务状态流转 | 符合业务语义 | 状态设计要合理 |
+| 分布式锁 | 通用场景 | 灵活 | 引入外部组件，性能损耗 |
+

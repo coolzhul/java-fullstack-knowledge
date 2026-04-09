@@ -661,11 +661,11 @@ graph TD
         HP["堆内存 Heap"]
         P["字符串常量池<br/>String Pool<br/>（堆内，JDK 7+）"]
         
-        S1["s1 = \"Hello\"<br/>指向常量池"] --> P
-        S2["s2 = \"Hello\"<br/>指向常量池"] --> P
-        S3["s3 = new String(\"Hello\")<br/>堆上新对象"] --> HP
+        S1["s1 = 'Hello'<br/>指向常量池"] --> P
+        S2["s2 = 'Hello'<br/>指向常量池"] --> P
+        S3["s3 = new String('Hello')<br/>堆上新对象"] --> HP
         S4["s4 = s3.intern()<br/>指向常量池"] --> P
-        L1["\"Hello\"<br/>常量池中唯一一份"] --> P
+        L1["'Hello'<br/>常量池中唯一一份"] --> P
     end
 ```
 

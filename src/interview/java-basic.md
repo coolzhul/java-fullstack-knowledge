@@ -517,3 +517,81 @@ public void divide(int a, int b) {
 4. **try-with-resources** 替代手动 close：`try (InputStream is = new FileInputStream(f)) { ... }`
 :::
 
+---
+
+## ⭐ Java 泛型中 ? extends T 和 ? super T 的区别？
+
+**简要回答：** `? extends T` 是上界通配符（只读），`? super T` 是下界通配符（只写）。这就是 PECS 原则（Producer Extends, Consumer Super）。
+
+**深度分析：**
+
+```java
+// ? extends T — 上界通配符（Producer）
+// 可以读取 T 及其子类，不能往里写（除了 null）
+List<? extends Number> list = new ArrayList<Integer>();
+Number n = list.get(0);    // ✅ 读取安全，返回 Number
+list.add(new Integer(1)); // ❌ 编译错误，不知道具体类型
+
+// ? super T — 下界通配符（Consumer）
+// 可以写入 T 及其父类，读取只能得到 Object
+List<? super Integer> list2 = new ArrayList<Number>();
+list2.add(new Integer(1)); // ✅ 写入安全
+Number n = list2.get(0);   // ❌ 编译错误，只能 Object obj = list2.get(0)
+
+// PECS 原则实战
+class Collections {
+    // 源（读取）用 extends
+    public static <T> void copy(List<? super T> dest, List<? extends T> src) {
+        for (T e : src) dest.add(e);
+    }
+    
+    // 树形结构遍历
+    public static <T extends Comparable<? super T>> void sort(List<T> list) { ... }
+}
+```
+
+| 通配符 | 读取 | 写入 | 典型场景 |
+|--------|:---:|:---:|----------|
+| `? extends T` | ✅ 返回 T | ❌ | 遍历集合、读取数据 |
+| `? super T` | ❌ 只能 Object | ✅ 写入 T | 写入集合、消费数据 |
+| `<T>` 无通配符 | ✅ 返回 T | ✅ 写入 T | 读写都需要时 |
+
+:::tip 面试追问
+- **为什么需要通配符？** Java 泛型是不变的（`List<Integer>` 不是 `List<Number>`），通配符提供协变/逆变能力
+- **什么是型变？** 协变（子类型关系保留）、逆变（子类型关系反转）、不变（无子类型关系）
+:::
+
+---
+
+## ⭐ WeakReference、SoftReference、PhantomReference 的区别？
+
+**简要回答：** 都是虚引用，引用强度递减：强引用 > 软引用 > 弱引用 > 虚引用。不同引用在 GC 时的行为不同。
+
+**深度分析：**
+
+```java
+// 强引用：只要引用存在就不会被 GC
+Object strong = new Object();
+
+// 软引用 SoftReference：内存不足时才回收，适合做缓存
+SoftReference<byte[]> cache = new SoftReference<>(new byte[1024 * 1024 * 10]);
+byte[] data = cache.get();  // 内存够时返回数据，不够时返回 null
+
+// 弱引用 WeakReference：下次 GC 一定回收，ThreadLocal 的 key 就用的弱引用
+WeakReference<Object> wr = new WeakReference<>(new Object());
+wr.get();  // GC 前有值，GC 后为 null
+
+// 虚引用 PhantomReference：无法通过 get() 获取对象，仅用于跟踪 GC 回收
+ReferenceQueue<Object> queue = new ReferenceQueue<>();
+PhantomReference<Object> pr = new PhantomReference<>(new Object(), queue);
+pr.get();  // 永远返回 null
+// 当 GC 准备回收对象时，会将 PhantomReference 放入 ReferenceQueue
+```
+
+| 引用类型 | GC 行为 | get() | 典型场景 |
+|----------|---------|-------|----------|
+| 强引用 | 永不回收 | 正常 | 日常使用 |
+| 软引用 | 内存不足时回收 | 可能为 null | 本地缓存（Guava Cache） |
+| 弱引用 | 下次 GC 时回收 | 可能为 null | ThreadLocal、WeakHashMap |
+| 虚引用 | 随时回收 | 永远 null | 跟踪对象回收、管理堆外内存 |
+

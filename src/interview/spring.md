@@ -556,3 +556,102 @@ flowchart TD
 - **执行顺序**：@PostConstruct → InitializingBean → init-method；@PreDestroy → DisposableBean → destroy-method
 :::
 
+---
+
+## ⭐ @Autowired 和 @Resource 的区别？
+
+**简要回答：** `@Autowired` 是 Spring 的注解，默认按类型注入；`@Resource` 是 JSR-250 标准注解，默认按名称注入。两者都可以用于依赖注入，但策略不同。
+
+**深度分析：**
+
+```java
+// @Autowired — Spring 注解，按类型匹配
+@Autowired
+private UserService userService;  // 按 UserService 类型注入
+
+// 多个同类型 Bean 时配合 @Qualifier 指定名称
+@Autowired
+@Qualifier("userServiceImpl")
+private UserService userService;
+
+// @Resource — JSR-250 标准注解，按名称匹配
+@Resource(name = "userServiceImpl")
+private UserService userService;  // 先按 name 查找，找不到再按类型
+
+// @Resource 不指定 name 时，默认取字段名作为 Bean 名称
+@Resource
+private UserService userService;  // 等价于 @Resource(name = "userService")
+```
+
+| 维度 | @Autowired | @Resource |
+|------|-----------|----------|
+| 来源 | Spring 框架 | JSR-250 标准（Java） |
+| 匹配策略 | 默认按类型（byType） | 默认按名称（byName） |
+| 多 Bean 处理 | 需要 @Qualifier | 通过 name 属性指定 |
+| 必须依赖 | required=false 可选 | 无 required 属性，找不到会报错 |
+| 适用位置 | 构造器、方法、参数、字段 | 字段、方法（不支持构造器） |
+
+:::tip 面试追问
+- **推荐用哪个？** Spring 项目中推荐 `@Autowired`（生态一致），如果追求解耦用 `@Resource`
+- **构造器注入 vs 字段注入？** Spring 官方推荐构造器注入（不可变性、方便测试、避免循环依赖），但字段注入更简洁
+- **@Autowired 能用在静态字段上吗？** 不能直接用，需要通过 setter 方法或 `@PostConstruct` 中反射注入
+:::
+
+---
+
+## ⭐ Spring 事务在什么情况下会失效？
+
+**简要回答：** 常见失效场景：同类方法内部调用、方法不是 public、异常被 catch 吞掉、抛出的是 checked 异常、数据库引擎不支持事务。
+
+**深度分析：**
+
+```java
+@Service
+public class UserService {
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+    
+    // ❌ 失效1：同类内部调用（this 调用不走代理）
+    public void batchInsert() {
+        this.insertOne();  // 事务不生效！应该注入自己或用 AopContext
+    }
+    
+    @Transactional
+    public void insertOne() { ... }
+    
+    // ❌ 失效2：方法不是 public
+    @Transactional
+    void privateMethod() { ... }  // Spring AOP 只能代理 public 方法
+    
+    // ❌ 失效3：异常被 catch 吞掉
+    @Transactional
+    public void transfer() {
+        try {
+            // 转账逻辑
+        } catch (Exception e) {
+            log.error("转账失败", e);  // 异常被吞，事务不回滚
+        }
+    }
+    
+    // ❌ 失效4：抛出 checked 异常（默认只回滚 RuntimeException）
+    @Transactional
+    public void readFile() throws IOException {
+        throw new IOException();  // 不回滚！
+    }
+    
+    // ✅ 解决：指定 rollbackFor
+    @Transactional(rollbackFor = Exception.class)
+    public void readFile2() throws IOException { ... }
+}
+```
+
+| 失效场景 | 原因 | 解决方案 |
+|----------|------|----------|
+| 同类内部调用 | this 调用不走 AOP 代理 | 注入自身 `@Lazy @Autowired` 或用 `AopContext` |
+| 非 public 方法 | Spring CGLIB 无法代理 | 方法改为 public |
+| 异常被 catch | 没有抛出异常，Spring 不知道失败 | catch 后手动 `TransactionAspectSupport.currentTransactionStatus().setRollbackOnly()` |
+| checked 异常 | 默认只回滚 RuntimeException | `@Transactional(rollbackFor = Exception.class)` |
+| 数据库引擎 | MyISAM 不支持事务 | 改用 InnoDB |
+| 传播行为不对 | `Propagation.NOT_SUPPORTED` 跳过事务 | 使用默认 `REQUIRED` |
+

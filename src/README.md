@@ -39,15 +39,25 @@ features:
     details: 消息队列、RPC框架、分布式事务、分布式锁等分布式系统核心技术
     link: /distributed/
 
-  - title: 开发工具
-    icon: tool
-    details: Maven构建工具、Git版本控制、Docker容器化部署等开发运维工具
-    link: /tools/
+  - title: 工程化
+    icon: wrench
+    details: Maven构建、Git版本控制、Linux运维、Nginx代理、Docker容器化、CI/CD自动化
+    link: /engineering/
 
   - title: 架构设计
     icon: architecture
     details: 高并发架构设计、微服务架构、系统设计原则与最佳实践
     link: /architecture/
+
+  - title: AI 技术栈
+    icon: robot
+    details: Python 全阶段学习、AI 大模型应用开发、RAG、Agent、Java AI 生产落地
+    link: /ai/
+
+  - title: 面试题库
+    icon: clipboard
+    details: 精选 Java 全栈面试高频题，按专题分类，涵盖基础到架构
+    link: /interview/
 
   - title: 持续更新
     icon: update
@@ -71,8 +81,10 @@ footer: MIT 协议 | 版权所有 © 2024-present coolzhul
 | Spring生态 | IOC、AOP、Boot、Cloud | [探索框架](/spring/) |
 | 数据库 | MySQL、Redis、ES | [掌握存储](/database/) |
 | 分布式 | MQ、RPC、分布式事务 | [了解分布](/distributed/) |
-| 开发工具 | Maven、Git、Docker | [提升效率](/tools/) |
+| 工程化 | Maven、Git、Linux、Nginx、Docker、CI/CD | [提升效率](/engineering/) |
 | 架构设计 | 高并发、微服务 | [设计架构](/architecture/) |
+| AI技术栈 | Python、大模型、RAG、Agent | [AI学习](/ai/) |
+| 面试题库 | Java全栈面试高频题 | [刷题备战](/interview/) |
 
 ## 关于本站
 

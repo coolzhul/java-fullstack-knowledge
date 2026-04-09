@@ -52,3 +52,115 @@ RabbitMQ：     中小规模业务、微服务解耦     →  易用性最佳
 - RocketMQ 事务消息的实现原理？→ 半消息 + 本地事务执行 + 回查机制（Broker 定时回查 Producer 事务状态）
 - 如何保证消息的幂等消费？→ 全局唯一消息 ID + Redis/数据库去重表，消费前先查重
 :::
+
+---
+
+## ⭐ Kafka 如何保证消息不丢失？
+
+**简要回答：** 三个环节：Producer 端（acks=all + retries）、Broker 端（min.insync.replicas ≥ 2）、Consumer 端（手动提交 offset，业务处理完再提交）。
+
+**深度分析：**
+
+```java
+// Producer 端配置
+Properties props = new Properties();
+props.put("acks", "all");                          // 所有 ISR 副本确认
+props.put("retries", Integer.MAX_VALUE);             // 无限重试
+props.put("max.in.flight.requests.per.connection", 1); // 顺序保证
+props.put("enable.idempotence", true);               // 开启幂等
+
+// Broker 端配置
+// min.insync.replicas=2（ISR 中至少 2 个副本确认）
+// unclean.leader.election.enable=false（禁止非 ISR 副本成为 Leader）
+
+// Consumer 端：手动提交 offset
+props.put("enable.auto.commit", "false");  // 关闭自动提交
+
+while (true) {
+    ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(1000));
+    for (ConsumerRecord<String, String> record : records) {
+        // 1. 业务处理（落库等）
+        processMessage(record);
+        // 2. 业务处理成功后再提交 offset
+        consumer.commitSync();  // 同步提交
+    }
+}
+```
+
+:::tip 面试追问
+- **acks=all vs acks=1？** all 等所有 ISR 副本确认（最安全），1 只等 Leader 确认（Leader 挂了可能丢）
+- **什么是 ISR？** In-Sync Replicas，与 Leader 保持同步的副本集合。落后太多的副本会被踢出 ISR
+- **消费者组再平衡时会不会丢消息？** 可能。解决方案：Consumer 配置 `enable.auto.commit=false` + 再平衡监听器中提交 offset
+:::
+
+---
+
+## ⭐ Kafka 如何保证消息顺序？
+
+**简要回答：** Kafka 只保证**分区内有序**，不保证全局有序。发送时指定相同的 Key（如订单ID），确保相关消息进入同一个分区。
+
+**深度分析：**
+
+```java
+// 同一订单的消息发到同一分区，保证顺序
+ProducerRecord<String, String> record = new ProducerRecord<>(
+    "order-topic",
+    orderId.toString(),  // Key → 决定分区（相同 Key → 相同分区）
+    JSON.toJSONString(orderEvent)
+);
+producer.send(record);
+
+// Consumer 消费时也要保证单线程消费一个分区
+// KafkaConsumer 的 poll 是单线程的，天然保证分区内的顺序
+```
+
+| 场景 | 方案 |
+|------|------|
+| 同一业务实体有序 | 发送时指定相同的 Key |
+| 全局有序 | 只有一个分区（不推荐，丧失并发性） |
+| 消费端乱序 | 内存缓冲排序、按时间戳排序（不推荐，复杂） |
+
+:::tip 面试追问
+- **Key 为 null 时怎么分配分区？** 使用轮询（Round Robin）或 Sticky 分区策略
+- **分区数怎么定？** 一般等于消费者数或略大，保证负载均衡。扩分区可以，缩分区不行
+- **为什么分区多性能不一定好？** 分区过多 → 文件句柄多 → 内存占用大 → 故障恢复慢
+:::
+
+---
+
+## ⭐ Kafka 消息积压怎么处理？
+
+**简要回答：** 紧急扩容消费者、增加分区数、临时消费者程序批量处理。关键是要快速消费积压，避免影响正常业务。
+
+**深度分析：**
+
+```mermaid
+graph TD
+    A["发现消息积压<br/>数百万条未消费"] --> B{"能增加消费者？"}
+    B -->|"是"| C["增加分区数<br/>（Kafka 不支持减少）"]
+    C --> D["增加消费者实例<br/>（≤ 分区数）"]
+    B -->|"否<br/>消费者数已 = 分区数"| E["临时方案：
+写独立消费者程序<br/>跳过非积压消息"]
+    D --> F["批量消费<br/>max.poll.records 调大"]
+    E --> F
+    F --> G["消费完成后
+恢复正常消费者"]
+    
+    style A fill:#fdedec,stroke:#e74c3c
+    style G fill:#eafaf1,stroke:#27ae60
+```
+
+| 方案 | 操作 | 适用场景 |
+|------|------|----------|
+| 增加消费者 | 部署更多 Consumer 实例 | 消费者数 < 分区数 |
+| 增加分区 | `kafka-topics --alter --partitions` | 需要更多并行度 |
+| 批量消费 | `max.poll.records=500` | 单条处理太慢 |
+| 异步处理 | 消费后丢到线程池并行处理 | 无严格顺序要求 |
+| 临时消费者 | 跳过历史消息，只消费新的 | 紧急恢复，容忍少量丢失 |
+
+:::warning 根本解决方案
+积压通常是消费能力不足，根本解决：
+1. **优化消费逻辑**：减少 IO、批量落库、异步处理
+2. **提升消费并发**：增加分区 + 消费者
+3. **削峰**：上游限流，避免突发流量打满
+:::

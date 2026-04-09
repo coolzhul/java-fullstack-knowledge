@@ -183,7 +183,16 @@ const aiSidebar = [
 
 export default sidebar({
   // 面试题库模块
-  "/interview/": "structure",
+  "/interview/": [
+    "",
+    { text: "Java 基础面试题", icon: "language-java", link: "java-basic" },
+    { text: "Spring 生态面试题", icon: "leaf", link: "spring" },
+    { text: "数据库面试题", icon: "database", link: "database" },
+    { text: "并发编程面试题", icon: "concurrent", link: "concurrency" },
+    { text: "分布式面试题", icon: "network", link: "distributed" },
+    { text: "Kafka 面试题", icon: "note", link: "kafka" },
+    { text: "架构设计面试题", icon: "office-building-cog", link: "architecture" },
+  ],
 
   // Java进阶 — 显式配置，子页面保持导航不变
   "/java-advanced/": [
@@ -238,8 +247,36 @@ export default sidebar({
   // Java基础模块
   "/java-basic/": "structure",
 
-  // Spring生态模块
-  "/spring/": "structure",
+  // Spring生态模块（含 MyBatis）
+  "/spring/": [
+    "",
+    { text: "Spring IOC", icon: "leaf", link: "ioc" },
+    { text: "Spring AOP", icon: "leaf", link: "aop" },
+    { text: "Spring MVC", icon: "leaf", link: "mvc" },
+    { text: "Spring Boot", icon: "leaf", link: "boot" },
+    { text: "Spring Cloud", icon: "cloud", link: "cloud" },
+    { text: "Spring Security", icon: "shield", link: "security" },
+    {
+      text: "MyBatis",
+      icon: "database-search",
+      prefix: "/spring/mybatis/",
+      collapsible: true,
+      children: [
+        { text: "核心原理", icon: "database", link: "mybatis" },
+        { text: "MyBatis-Plus 实战", icon: "database-plus", link: "mybatis-plus" },
+      ],
+    },
+    {
+      text: "工作流引擎",
+      icon: "cogs",
+      prefix: "/spring/workflow/",
+      collapsible: true,
+      children: [
+        { text: "Activiti", icon: "cogs", link: "activiti" },
+        { text: "Flowable", icon: "cogs", link: "flowable" },
+      ],
+    },
+  ],
 
   // 数据库模块
   "/database/": "structure",
@@ -247,8 +284,44 @@ export default sidebar({
   // 分布式模块
   "/distributed/": "structure",
 
-  // 开发工具模块
-  "/tools/": "structure",
+  // 工程化模块（原 tools + devops 合并）
+  "/engineering/": [
+    "",
+    { text: "Maven 构建管理", icon: "package", link: "maven" },
+    { text: "Git 版本控制", icon: "source-branch", link: "git" },
+    { text: "Linux 常用命令", icon: "console", link: "linux" },
+    { text: "Nginx", icon: "server", link: "nginx" },
+    { text: "Docker & K8s", icon: "docker", link: "docker" },
+    { text: "CI/CD", icon: "pipe", link: "cicd" },
+  ],
+
+  // 前端基础模块
+  "/frontend/": [
+    "",
+    { text: "HTML5 + CSS3", icon: "language-html5", link: "html-css" },
+    { text: "JavaScript", icon: "language-javascript", link: "javascript" },
+    { text: "TypeScript", icon: "language-typescript", link: "typescript" },
+    {
+      text: "Vue 3",
+      icon: "vuejs",
+      prefix: "/frontend/vue/",
+      collapsible: true,
+      children: [
+        { text: "基础", icon: "vuejs", link: "vue3-basics" },
+        { text: "进阶", icon: "rocket", link: "vue3-advanced" },
+      ],
+    },
+    {
+      text: "React",
+      icon: "react",
+      prefix: "/frontend/react/",
+      collapsible: true,
+      children: [
+        { text: "基础", icon: "react", link: "react-basics" },
+        { text: "进阶", icon: "rocket", link: "react-advanced" },
+      ],
+    },
+  ],
 
   // 架构设计模块
   "/architecture/": "structure",
@@ -279,14 +352,19 @@ export default sidebar({
       link: "/database/",
     },
     {
+      text: "前端基础",
+      icon: "language-html5",
+      link: "/frontend/",
+    },
+    {
       text: "分布式",
       icon: "network",
       link: "/distributed/",
     },
     {
-      text: "开发工具",
-      icon: "tool",
-      link: "/tools/",
+      text: "工程化",
+      icon: "wrench",
+      link: "/engineering/",
     },
     {
       text: "架构设计",

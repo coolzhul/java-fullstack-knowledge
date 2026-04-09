@@ -17,8 +17,10 @@ export default navbar([
   },
   { text: "Spring生态", icon: "mdi:leaf", link: "/spring/" },
   { text: "数据库", icon: "mdi:database", link: "/database/" },
+
   { text: "分布式", icon: "mdi:network", link: "/distributed/" },
-  { text: "开发工具", icon: "mdi:tools", link: "/tools/" },
+  { text: "工程化", icon: "mdi:wrench", link: "/engineering/" },
+  { text: "前端基础", icon: "mdi:language-html5", link: "/frontend/" },
   { text: "架构设计", icon: "mdi:office-building-cog", link: "/architecture/" },
   { text: "面试题库", icon: "mdi:clipboard-text", link: "/interview/" },
   {
